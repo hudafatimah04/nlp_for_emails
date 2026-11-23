@@ -14,6 +14,7 @@ from gmail_integration.attachment_downloader import download_attachment
 from gmail_integration.authentication import get_gmail_service
 from gmail_integration.email_parser import parse_message
 from gmail_integration.email_reader import get_message, list_message_ids
+from nlp.extraction_pipeline import build_opportunities
 from nlp.opportunity_classifier import classify_opportunity
 from storage.processed_store import is_processed, mark_processed
 
@@ -65,17 +66,7 @@ def _classify_email(
         print("skipped (already processed)")
         return True
 
-    texts = []
-    incomplete = False
-    for attachment, (download, extraction) in zip(
-        message["attachments"], _attachment_results(service, message_id, message), strict=True
-    ):
-        texts.append((attachment["filename"], extraction["text"] if extraction else None))
-        if download["status"] == "failed" or (
-            extraction and extraction["status"] in {"failed", "partial"}
-        ):
-            incomplete = True
-
+    texts, incomplete = _classification_inputs(service, message_id, message)
     result = classify_opportunity(message["subject"], message["body_text"], texts)
     if not explain:
         for document in result["documents"]:
@@ -86,6 +77,40 @@ def _classify_email(
     print(json.dumps({"gmail_message_id": message_id, "subject": message["subject"], **result}))
     if not dry_run and not incomplete:
         mark_processed(message_id, header, result["classification"])
+    return not incomplete
+
+
+def _classification_inputs(
+    service: Resource, message_id: str, message: dict[str, Any]
+) -> tuple[list[tuple[str | None, str | None]], bool]:
+    texts = []
+    incomplete = False
+    for attachment, (download, extraction) in zip(
+        message["attachments"], _attachment_results(service, message_id, message), strict=True
+    ):
+        texts.append((attachment["filename"], extraction["text"] if extraction else None))
+        if download["status"] == "failed" or (
+            extraction and extraction["status"] in {"failed", "partial"}
+        ):
+            incomplete = True
+    return texts, incomplete
+
+
+def _extract_fields_email(service: Resource, message_id: str, explain: bool) -> bool:
+    message = parse_message(get_message(service, message_id), include_attachment_data=True)
+    texts, incomplete = _classification_inputs(service, message_id, message)
+    classification = classify_opportunity(message["subject"], message["body_text"], texts)
+    for opportunity in build_opportunities(message, classification, texts):
+        if incomplete:
+            processing = opportunity["processing"]
+            processing["requires_review"] = True
+            processing["review_reasons"].append("Attachment processing was incomplete.")
+        if not explain:
+            for item in opportunity["evidence"].values():
+                item.pop("span", None)
+        print(json.dumps(opportunity))
+    if incomplete:
+        print(f"Attachment processing was incomplete for Gmail message {message_id}.", file=sys.stderr)
     return not incomplete
 
 
@@ -104,6 +129,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     classify.add_argument("--reprocess", action="store_true", help="Include previously processed messages.")
     classify.add_argument("--dry-run", action="store_true", help="Classify without updating the processed store.")
     classify.add_argument("--explain", action="store_true", help="Show category scores for each document.")
+    fields = commands.add_parser("extract-fields", help="Extract fields for each opportunity.")
+    fields.add_argument("--max", type=int, default=10, help="Maximum number of messages.")
+    fields.add_argument("--explain", action="store_true", help="Include short matched evidence spans.")
     args = parser.parse_args(argv)
     if args.max < 1:
         parser.error("--max must be a positive integer")
@@ -112,6 +140,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         service = get_gmail_service()
         for message_id in list_message_ids(service, settings.ALLOWED_SENDERS, args.max):
+            if args.command == "extract-fields":
+                try:
+                    if not _extract_fields_email(service, message_id, args.explain):
+                        failed = True
+                except Exception:
+                    print(f"Could not extract fields for Gmail message {message_id}.", file=sys.stderr)
+                    failed = True
+                continue
             if args.command == "classify":
                 try:
                     if not _classify_email(
