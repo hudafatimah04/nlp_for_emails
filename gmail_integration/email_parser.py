@@ -42,6 +42,7 @@ def _collect_parts(
     part: dict[str, Any],
     bodies: dict[str, list[str]],
     attachments: list[dict[str, Any]],
+    include_attachment_data: bool,
 ) -> None:
     headers = _headers(part)
     mime_type = part.get("mimeType") or None
@@ -52,7 +53,7 @@ def _collect_parts(
     disposition = headers.get("content-disposition", "").split(";", 1)[0].strip().lower()
 
     if filename or disposition == "attachment" or (attachment_id and media_type not in _TEXT_TYPES):
-        attachments.append({
+        attachment = {
             "filename": filename,
             "mime_type": mime_type,
             "size": body.get("size"),
@@ -61,7 +62,10 @@ def _collect_parts(
                 media_type in _SUPPORTED_TYPES
                 or PurePath(filename or "").suffix.lower() in _SUPPORTED_EXTENSIONS
             ),
-        })
+        }
+        if include_attachment_data and attachment["is_supported"] and not attachment_id and "data" in body:
+            attachment["data"] = body["data"]
+        attachments.append(attachment)
         return
 
     if media_type in _TEXT_TYPES and body.get("data"):
@@ -75,7 +79,7 @@ def _collect_parts(
             bodies[media_type].append(value.strip())
 
     for child in part.get("parts", []):
-        _collect_parts(child, bodies, attachments)
+        _collect_parts(child, bodies, attachments, include_attachment_data)
 
 
 def _received_at(internal_date: str | int | None) -> str | None:
@@ -89,7 +93,9 @@ def _received_at(internal_date: str | int | None) -> str | None:
     return timestamp.isoformat()
 
 
-def parse_message(raw_message: dict[str, Any]) -> dict[str, Any]:
+def parse_message(
+    raw_message: dict[str, Any], *, include_attachment_data: bool = False
+) -> dict[str, Any]:
     """Parse a full Gmail message without requesting external attachment data."""
     payload = raw_message.get("payload", {})
     headers = _headers(payload)
@@ -103,7 +109,7 @@ def parse_message(raw_message: dict[str, Any]) -> dict[str, Any]:
 
     bodies: dict[str, list[str]] = {"text/plain": [], "text/html": []}
     attachments: list[dict[str, Any]] = []
-    _collect_parts(payload, bodies, attachments)
+    _collect_parts(payload, bodies, attachments, include_attachment_data)
     body_parts = bodies["text/plain"] or bodies["text/html"]
 
     return {

@@ -13,7 +13,8 @@ _RETRY_DELAYS = (1, 2, 4)
 _TEMPORARY_STATUSES = {429, 500, 503}
 
 
-def _execute(request: HttpRequest) -> dict[str, Any]:
+def execute_request(request: HttpRequest) -> dict[str, Any]:
+    """Execute a Gmail request with retry and backoff for temporary errors."""
     for attempt in range(len(_RETRY_DELAYS) + 1):
         try:
             return request.execute()
@@ -54,7 +55,7 @@ def list_message_ids(
     ids: list[str] = []
     while len(ids) < max_results:
         remaining = max_results - len(ids)
-        page = _execute(messages.list(maxResults=min(500, remaining), **params))
+        page = execute_request(messages.list(maxResults=min(500, remaining), **params))
         ids.extend(message["id"] for message in page.get("messages", [])[:remaining])
         page_token = page.get("nextPageToken")
         if not page_token:
@@ -65,4 +66,4 @@ def list_message_ids(
 
 def get_message(service: Resource, message_id: str) -> dict[str, Any]:
     """Fetch the full Gmail message payload."""
-    return _execute(service.users().messages().get(userId="me", id=message_id, format="full"))
+    return execute_request(service.users().messages().get(userId="me", id=message_id, format="full"))

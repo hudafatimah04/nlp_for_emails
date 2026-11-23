@@ -23,3 +23,13 @@ Enable the Gmail API in your Google Cloud project and create an OAuth client for
 When OAuth opens your browser, sign in to the Gmail account that receives the opportunity emails. The command prints one JSON summary per message, including attachment metadata. Add `--show-body` to include the first 500 body characters in each summary.
 
 Run the offline tests with `.\venv\Scripts\python.exe -m pytest`.
+
+## Extract attachment text
+
+Set `ATTACHMENT_DIR` in `.env` to a local directory such as `attachments`. Install Tesseract with English language data for scanned PDFs. If the executable is outside your PATH, set `TESSERACT_CMD` in `.env` to its full path.
+
+```powershell
+.\venv\Scripts\python.exe main.py extract --max 10
+```
+
+The command prints one JSON summary per attachment, including unsupported files and extraction failures. Add `--show-text` to include up to 200 characters of extracted text. Downloads use per-message directories and add a numeric suffix when a filename already exists.

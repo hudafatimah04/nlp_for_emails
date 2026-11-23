@@ -13,6 +13,7 @@ ALLOWED_SENDERS = [
     if sender.strip()
 ]
 ATTACHMENT_DIR = os.getenv("ATTACHMENT_DIR") or None
+TESSERACT_CMD = os.getenv("TESSERACT_CMD") or None
 
 _poll_interval = os.getenv("POLL_INTERVAL_SECONDS", "").strip()
 POLL_INTERVAL_SECONDS = int(_poll_interval) if _poll_interval else None
