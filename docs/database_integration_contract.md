@@ -278,3 +278,6 @@ The example department code is illustrative and must resolve to an existing `DEP
 15. [ ] **PENDING CONFIRMATION** — Define FK `ON DELETE` behavior.
 16. [ ] **PENDING CONFIRMATION** — Define Supabase Auth and RLS choices. The separate decision about `STUDENT.password_hash` is tracked in item 9.
 17. [ ] **PENDING CONFIRMATION** — Confirm any needed FK lookup indexes after checking key coverage. Review any additional index proposals with the team.
+18. [ ] **PENDING CONFIRMATION** — Confirm whether the backend will honor the `Idempotency-Key` header in the form `<gmail_message_id>:<n>`, where `n` is the opportunity's position within the email, starting at 1. If the backend does not honor the header, agree on how it will detect and reject duplicate opportunities.
+19. [ ] **PENDING CONFIRMATION** — Define the response when the same source email arrives with a new opportunity. Because `SOURCE_EMAIL.message_identifier` is unique, the retry must reuse the existing `SOURCE_EMAIL` row and link the new opportunity to it instead of failing on a second source-row insert.
+20. [ ] **PENDING CONFIRMATION** — Agree on the HTTP status codes for an accepted opportunity, a duplicate opportunity, and an invalid request.

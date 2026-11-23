@@ -85,7 +85,7 @@ def test_one_opportunity_processed_and_second_run_skips(inbox, tmp_path, capsys)
     first = read_tally(capsys)
     assert first["processed"] == first["opportunities_handed_off"] == 1
     assert is_processed("synthetic-email", None)
-    assert is_delivered("synthetic-email:1")
+    assert is_delivered("synthetic-email:1", "mock")
     with closing(sqlite3.connect(settings.PROCESSED_DB_PATH)) as connection:
         assert connection.execute("SELECT status FROM processed_emails").fetchone() == ("processed",)
         assert connection.execute("SELECT mode FROM handoff_ledger").fetchone() == ("mock",)
@@ -100,7 +100,7 @@ def test_library_email_is_marked_not_an_opportunity(inbox, tmp_path, capsys):
     assert cli.main(run_args(tmp_path)) == 0
     assert read_tally(capsys)["not_an_opportunity"] == 1
     assert not (tmp_path / "json").exists()
-    assert not is_delivered("synthetic-email:1")
+    assert not is_delivered("synthetic-email:1", "mock")
     with closing(sqlite3.connect(settings.PROCESSED_DB_PATH)) as connection:
         assert connection.execute("SELECT status FROM processed_emails").fetchone() == ("not_an_opportunity",)
 
@@ -142,7 +142,7 @@ def test_partial_handoff_retries_only_undelivered_key(inbox, tmp_path, monkeypat
     assert failed["errors"] == failed["retryable_errors"] == 1
     assert failed["opportunities_handed_off"] == 1
     assert not is_processed("synthetic-email", None)
-    assert is_delivered("synthetic-email:1") and not is_delivered("synthetic-email:2")
+    assert is_delivered("synthetic-email:1", "http") and not is_delivered("synthetic-email:2", "http")
     assert [call.kwargs["headers"]["Idempotency-Key"] for call in post.call_args_list] == [
         "synthetic-email:1", *["synthetic-email:2"] * 3,
     ]
@@ -154,7 +154,40 @@ def test_partial_handoff_retries_only_undelivered_key(inbox, tmp_path, monkeypat
     assert post.call_args.kwargs["headers"]["Idempotency-Key"] == "synthetic-email:2"
     post.assert_called_once()
     assert is_processed("synthetic-email", None)
-    assert is_delivered("synthetic-email:2")
+    assert is_delivered("synthetic-email:2", "http")
+
+
+@pytest.mark.parametrize(("first_mode", "second_mode"), [("mock", "http"), ("http", "mock")])
+def test_run_delivers_after_switching_modes_then_skips_within_mode(
+    inbox, tmp_path, monkeypatch, capsys, first_mode, second_mode
+):
+    messages, _, _, post = inbox
+    messages.clear()
+    messages["fake-msg-001"] = raw_email(
+        "fake-msg-001", subject="Campus hackathon", body="Registration deadline: 25 January 2027."
+    )
+    post.side_effect = None
+    post.return_value = Mock(status_code=200)
+    key = "fake-msg-001:1"
+    args = run_args(tmp_path)
+
+    monkeypatch.setattr(settings, "BACKEND_MODE", first_mode)
+    assert cli.main(args) == 0
+    assert read_tally(capsys)["opportunities_handed_off"] == 1
+    assert is_delivered(key, first_mode) and not is_delivered(key, second_mode)
+
+    monkeypatch.setattr(settings, "BACKEND_MODE", second_mode)
+    assert cli.main([*args, "--reprocess", "--dry-run"]) == 0
+    assert read_tally(capsys)["opportunities_already_delivered"] == 0
+    assert not is_delivered(key, second_mode)
+    assert cli.main([*args, "--reprocess"]) == 0
+    assert read_tally(capsys)["opportunities_handed_off"] == 1
+    assert is_delivered(key, second_mode)
+
+    assert cli.main([*args, "--reprocess"]) == 0
+    assert read_tally(capsys)["opportunities_already_delivered"] == 1
+    post.assert_called_once()
+    assert post.call_args.kwargs["headers"]["Idempotency-Key"] == key
 
 
 def test_backend_400_does_not_block_other_emails(inbox, tmp_path, monkeypatch, capsys):
@@ -209,8 +242,8 @@ def test_rejected_record_is_saved_but_not_handed_off(inbox, tmp_path, monkeypatc
     assert tally["rejected_not_sent"] == tally["opportunities_handed_off"] == tally["processed"] == 1
     rejected = tmp_path / "json" / "rejected" / "synthetic-email__1.json"
     assert json.loads(rejected.read_text(encoding="utf-8"))["processing"]["status"] == "rejected"
-    assert not is_delivered("synthetic-email:1")
-    assert is_delivered("synthetic-email:2")
+    assert not is_delivered("synthetic-email:1", "mock")
+    assert is_delivered("synthetic-email:2", "mock")
     assert is_processed("synthetic-email", None)
     assert len(list((tmp_path / "outbox").rglob("*.json"))) == 1
 
@@ -286,4 +319,4 @@ def test_incomplete_attachment_processing_defers_handoff(inbox, tmp_path, monkey
     assert tally["retryable_errors"] == 1
     assert tally["opportunities_handed_off"] == 0
     assert not is_processed("synthetic-email", None)
-    assert not is_delivered("synthetic-email:1")
+    assert not is_delivered("synthetic-email:1", "mock")

@@ -42,6 +42,10 @@ The command prints one JSON summary per attachment, including unsupported files 
 
 Classification uses the subject, email body, and extracted attachment text. Output includes the decision and matched rule terms. The local SQLite store uses `PROCESSED_DB_PATH`, which defaults to `processed_emails.db`. A match on either the Gmail ID or the RFC Message-ID skips the email. Use `--reprocess` to bypass this check or `--dry-run` to skip database writes. Dry runs can still download attachments. Messages with incomplete attachment processing remain eligible for retry.
 
+## Backend mode and delivery history
+
+Switching `BACKEND_MODE` keeps the handoff ledger intact. Deliveries are tracked separately for `mock` and `http`. Use `run --reprocess` to revisit emails already marked processed in the previous mode.
+
 ## Project structure
 
 - `gmail_integration/` handles Gmail access and attachments.

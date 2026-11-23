@@ -18,10 +18,11 @@ CREATE TABLE IF NOT EXISTS processed_emails (
 """
 _HANDOFF_SCHEMA = """
 CREATE TABLE IF NOT EXISTS handoff_ledger (
-    idempotency_key TEXT PRIMARY KEY NOT NULL,
+    idempotency_key TEXT NOT NULL,
     delivered_at TEXT NOT NULL,
     mode TEXT NOT NULL,
-    reference TEXT
+    reference TEXT,
+    PRIMARY KEY (idempotency_key, mode)
 )
 """
 
@@ -88,23 +89,41 @@ def clear_processed(gmail_message_id: str, message_id_header: str | None) -> Non
         )
 
 
-def is_delivered(idempotency_key: str) -> bool:
-    """Check for a successful handoff without creating the database or table."""
+def is_delivered(idempotency_key: str, mode: str) -> bool:
+    """Check delivery in one mode without modifying either ledger schema."""
     with _read_table("handoff_ledger") as connection:
         return connection is not None and connection.execute(
-            "SELECT 1 FROM handoff_ledger WHERE idempotency_key = ?", (idempotency_key,)
+            "SELECT 1 FROM handoff_ledger WHERE idempotency_key = ? AND mode = ?",
+            (idempotency_key, mode),
         ).fetchone() is not None
+
+
+def _ensure_handoff_schema(connection: sqlite3.Connection) -> None:
+    connection.execute(_HANDOFF_SCHEMA)
+    key_columns = {
+        row[1]: row[5] for row in connection.execute("PRAGMA table_info(handoff_ledger)") if row[5]
+    }
+    if key_columns == {"idempotency_key": 1}:
+        connection.execute("ALTER TABLE handoff_ledger RENAME TO handoff_ledger_legacy")
+        connection.execute(_HANDOFF_SCHEMA)
+        connection.execute("""
+            INSERT INTO handoff_ledger (idempotency_key, delivered_at, mode, reference)
+            SELECT idempotency_key, delivered_at, mode, reference FROM handoff_ledger_legacy
+        """)
+        connection.execute("DROP TABLE handoff_ledger_legacy")
 
 
 def record_delivery(idempotency_key: str, mode: str, reference: str | None) -> None:
     """Record a successful handoff in the local NLP ledger."""
     path = Path(settings.PROCESSED_DB_PATH).expanduser()
     with closing(sqlite3.connect(path)) as connection, connection:
-        connection.execute(_HANDOFF_SCHEMA)
+        # Serialize schema inspection, any legacy migration, and the delivery write.
+        connection.execute("BEGIN IMMEDIATE")
+        _ensure_handoff_schema(connection)
         connection.execute(
             """
             INSERT INTO handoff_ledger (idempotency_key, delivered_at, mode, reference)
-            VALUES (?, ?, ?, ?) ON CONFLICT (idempotency_key) DO NOTHING
+            VALUES (?, ?, ?, ?) ON CONFLICT (idempotency_key, mode) DO NOTHING
             """,
             (idempotency_key, datetime.now(timezone.utc).isoformat(), mode, reference),
         )

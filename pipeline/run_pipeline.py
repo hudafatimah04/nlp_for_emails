@@ -7,6 +7,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
+from config import settings
 from integration.backend_client import HandoffResult, send_opportunity
 from output.json_formatter import format_opportunity
 from output.local_json import write_json_file
@@ -27,7 +28,7 @@ class PipelineServices:
     check_processed: Callable[[str, str | None], bool] = is_processed
     save_processed: Callable[[str, str | None, str], None] = mark_processed
     reset_processed: Callable[[str, str | None], None] = clear_processed
-    check_delivered: Callable[[str], bool] = is_delivered
+    check_delivered: Callable[[str, str], bool] = is_delivered
     save_delivery: Callable[[str, str, str | None], None] = record_delivery
     send: Callable[[Record, str], HandoffResult] = send_opportunity
     write_file: Callable[[Path, Record, bool], bool] = write_json_file
@@ -47,6 +48,7 @@ def process_email(
     """Process one email, preserving successful handoffs when another record fails."""
     message_id = parsed_email.get("gmail_message_id")
     header = parsed_email.get("message_id_header")
+    mode = settings.BACKEND_MODE
     result = {
         "gmail_message_id": message_id, "outcome": "error", "opportunities": [],
         "warnings": [], "skipped": False, "dry_run": dry_run, "error": None,
@@ -96,7 +98,7 @@ def process_email(
                 # A missing document can change qualification and ordinal keys on retry.
                 summary.update(error="attachment_processing_incomplete", action="deferred")
                 continue
-            if services.check_delivered(key):
+            if services.check_delivered(key, mode):
                 summary.update(already_delivered=True, action="already_delivered")
                 continue
             if dry_run:
