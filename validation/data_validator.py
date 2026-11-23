@@ -176,8 +176,19 @@ def validate_opportunity(
     ]))
     if errors:
         reasons.append("Validation found errors.")
-    if warnings:
-        reasons.append("Validation or extraction warnings require review.")
+    missing_already_explained = any(reason.startswith("Missing fields:") for reason in reasons)
+    explained_fields = extracted.get("missing_fields", []) if missing_already_explained else []
+    unexplained = [
+        issue for issue in warnings
+        if issue["code"] != "missing_recommended" or issue["field"] not in explained_fields
+    ]
+    if unexplained:
+        labels = dict.fromkeys(
+            "missing recommended fields" if issue["code"] == "missing_recommended" else issue["code"]
+            for issue in unexplained
+        )
+        noun = "warning" if len(unexplained) == 1 else "warnings"
+        reasons.append(f"{len(unexplained)} {noun}: {', '.join(labels)}.")
     if conflicts:
         reasons.append("Extracted values conflict.")
     if extracted.get("requires_review") and not reasons:

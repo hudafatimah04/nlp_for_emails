@@ -193,3 +193,24 @@ def test_extraction_review_flag_alone_prevents_ready(ready_record):
     assert validated["status"] == "needs_review"
     assert validated["requires_review"]
     assert not validated["errors"] and not validated["warnings"]
+
+
+def test_warning_reasons_name_the_cause_without_repeating_missing_fields(ready_record):
+    ready_record["opportunity"].update(organizer=None, deadline="2026-11-30")
+    ready_record["eligibility"]["eligible_departments"].append("XYZ")
+    ready_record["processing"].update(
+        requires_review=True, missing_fields=["organizer"], review_reasons=["Missing fields: organizer."]
+    )
+    result = validate_opportunity(ready_record, REFERENCE_DATE)
+    assert result["review_reasons"] == [
+        "Missing fields: organizer.", "2 warnings: deadline_passed, unknown_department.",
+    ]
+    assert {issue["code"] for issue in result["warnings"]} == {
+        "deadline_passed", "unknown_department", "missing_recommended",
+    }
+
+
+def test_missing_recommended_warning_reason_when_no_explanation_exists(ready_record):
+    ready_record["opportunity"].update(organizer=None, location=None)
+    result = validate_opportunity(ready_record, REFERENCE_DATE)
+    assert result["review_reasons"] == ["2 warnings: missing recommended fields."]

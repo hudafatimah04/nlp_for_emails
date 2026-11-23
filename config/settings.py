@@ -20,3 +20,6 @@ _poll_interval = os.getenv("POLL_INTERVAL_SECONDS", "").strip()
 POLL_INTERVAL_SECONDS = int(_poll_interval) if _poll_interval else None
 
 BACKEND_API_URL = os.getenv("BACKEND_API_URL") or None
+BACKEND_MODE = os.getenv("BACKEND_MODE") or "mock"
+BACKEND_OUTBOX_DIR = os.getenv("BACKEND_OUTBOX_DIR") or "backend_outbox"
+BACKEND_API_TOKEN = os.getenv("BACKEND_API_TOKEN") or None
