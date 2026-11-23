@@ -14,8 +14,9 @@ _FIELDS = (
 )
 _TITLE = re.compile(r"^[ \t]*(?:event name|role|position|title)[ \t]*:[ \t]*(?P<value>[^\r\n]+)", re.I | re.M)
 _ORGANIZER = re.compile(
-    r"(?:^[ \t]*(?:company|organization)[ \t]*:[ \t]*|\b(?:organi[sz]ed|hosted|conducted)\s+by[ \t:]+)"
-    r"(?P<value>[^\r\n.;]+(?:\.(?=\w)[^\r\n.;]*)*)", re.I | re.M,
+    r"(?:^[ \t]*(?:company(?:[ \t]+name)?|organization|organi[sz]er)[ \t]*:[ \t]*"
+    r"|\b(?:organi[sz]ed|hosted|conducted|presented)[ \t]+by\b[ \t:]+)"
+    r"(?P<value>[^\r\n]+)", re.I | re.M,
 )
 _LOCATION = re.compile(
     r"^[ \t]*(?:(?:venue|location)[ \t]*:[ \t]*(?P<value>[^\r\n]+)|"
@@ -34,11 +35,26 @@ _DATE = (
     rf"|{_DAY}[ \t]+{_MONTH}(?:[ \t]+\d{{4}})?"
     rf"|{_MONTH}[ \t]+{_DAY}(?:,?[ \t]+\d{{4}})?)"
 )
-_DEADLINE = re.compile(
-    r"\b(?:registration deadline|application deadline|deadline|apply by|"
-    r"last date to (?:apply|register)|register before)\b"
-    rf"[ \t:]*(?:is[ \t]+|on[ \t]+)?(?:[-–][ \t]*)?(?:\r?\n[ \t]*)?(?P<date>{_DATE})(?!\w)",
-    re.I,
+_DATE_VALUE = rf"\b[ \t:]*(?:is[ \t]+|on[ \t]+)?(?:[-–—][ \t]*)?(?:\r?\n[ \t]*)?(?P<date>{_DATE})(?!\w)"
+_DATE_LABELS = {
+    "deadline": re.compile(
+        r"\b(?:registration deadline|application deadline|deadline|apply by|"
+        r"last date to (?:apply|register)|register before)" + _DATE_VALUE, re.I,
+    ),
+    "start_date": re.compile(
+        r"^[ \t]*(?:[-*•][ \t]+)?(?:event start date|start date|starts on|event date|"
+        r"commencement date|internship start(?: date)?)" + _DATE_VALUE, re.I | re.M,
+    ),
+    "end_date": re.compile(
+        r"^[ \t]*(?:[-*•][ \t]+)?(?:event end date|end date|ends on|internship end(?: date)?)"
+        + _DATE_VALUE, re.I | re.M,
+    ),
+}
+_OPENING_DATES = re.compile(
+    r"\b(?:registration|applications?)[ \t]+(?:opens?|starts?(?:[ \t]+date)?)\b"
+    rf"(?:[ \t:–—-]*\r?\n(?=[ \t]*{_DATE}))?[^;\r\n]*?"
+    r"(?=;|\r?$|\b(?:registration deadline|application deadline|deadline|apply by|"
+    r"last date to (?:apply|register)|register before)\b)", re.I | re.M,
 )
 _RANGE = re.compile(
     rf"(?<!\w)(?:from[ \t]+)?(?P<start>{_DATE})[ \t]*(?:to\b|through\b|[-–—])[ \t]*"
@@ -62,8 +78,9 @@ _FREE = re.compile(
     rf"|\b{_FEE_LABEL}\b[ \t:]*(?:is[ \t]+)?free\b|^[ \t]*free[ \t.!]*$", re.I | re.M,
 )
 _TEAM = re.compile(
-    r"\b(?P<team>teams?[ \t]+of[ \t]+(?:up[ \t]+to[ \t]+)?\d+(?:[ \t]*[-–][ \t]*\d+)?)"
-    r"|\b(?P<individual>individual[ \t]+participation|solo)\b", re.I,
+    r"\b(?P<team>team[- \t]+based|teams?[ \t]+of(?:[ \t]+(?:up[ \t]+to[ \t]+)?"
+    r"\d+(?:[ \t]*[-–][ \t]*\d+)?)?|team[ \t]+size|form[ \t]+a[ \t]+team|in[ \t]+teams)\b"
+    r"|\b(?P<individual>individual[ \t]+(?:participation|basis)|solo)\b", re.I,
 )
 _URL = re.compile(r"(?<!\w)(?:https?://|www\.)[^\s<>\"'{}\[\]]+", re.I)
 _LINK_CUE = re.compile(r"\b(?:register|registration|apply|application)\b", re.I)
@@ -74,7 +91,9 @@ _RELEVANT = re.compile(
 )
 _METADATA_LINE = re.compile(
     r"^\s*(?:please (?:find|see|refer)|eligible|eligibility|venue|location|mode|deadline|"
-    r"registration deadline|apply by|last date|event name|role|position|title|company|organization)\b",
+    r"registration (?:deadline|opens?|starts?)|applications? open|apply by|last date|"
+    r"event (?:name|(?:start |end )?date)|(?:start|end|commencement) date|starts on|ends on|"
+    r"internship (?:start|end)|role|position|title|company|organi[sz](?:ation|er))\b",
     re.I,
 )
 
@@ -94,7 +113,13 @@ def _resolve(candidates: list[_Candidate], field: str, fields: dict[str, Any],
         return
     first = candidates[0]
     if any(candidate.value != first.value for candidate in candidates[1:]):
-        warnings.append(f"Multiple candidates found for {field}.")
+        if field in _DATE_LABELS:
+            details = ", ".join(dict.fromkeys(
+                f"{candidate.value} (line {candidate.evidence['line_number']})" for candidate in candidates
+            ))
+            warnings.append(f"Multiple candidates found for {field}: {details}.")
+        else:
+            warnings.append(f"Multiple candidates found for {field}.")
         return
     fields[field], evidence[field] = first
 
@@ -124,7 +149,7 @@ def _parse_date(raw: str) -> tuple[str | None, str | None]:
 
 def _dates(text: str, source: str, fields: dict[str, Any], evidence: dict[str, Evidence],
            warnings: list[str]) -> None:
-    candidates: dict[str, list[_Candidate]] = {name: [] for name in ("deadline", "start_date", "end_date")}
+    candidates: dict[str, list[_Candidate]] = {name: [] for name in _DATE_LABELS}
     uncertain = set()
 
     def add(field: str, raw: str, match: re.Match[str]) -> None:
@@ -137,20 +162,39 @@ def _dates(text: str, source: str, fields: dict[str, Any], evidence: dict[str, E
         else:
             candidates[field].append(_candidate(text, match, source, result))
 
-    for match in _DEADLINE.finditer(text):
-        add("deadline", match["date"], match)
-
-    for match in _RANGE.finditer(text):
+    # Keep original offsets so masking registration-opening dates preserves evidence lines.
+    date_text = _OPENING_DATES.sub(lambda match: re.sub(r"[^\r\n]", " ", match[0]), text)
+    range_starts = set()
+    for match in _RANGE.finditer(date_text):
+        range_starts.add(match.start("start"))
         add("start_date", match["start"], match)
         add("end_date", match["end"], match)
-    for match in _SHORT_RANGE.finditer(text):
+    for match in _SHORT_RANGE.finditer(date_text):
+        range_starts.add(match.start("first"))
         tail = f"{match['month']} {match['year'] or ''}".rstrip()
         add("start_date", f"{match['first']} {tail}", match)
         add("end_date", f"{match['last']} {tail}", match)
+    for field, pattern in _DATE_LABELS.items():
+        for match in pattern.finditer(date_text):
+            if field == "deadline" or match.start("date") not in range_starts:
+                add(field, match["date"], match)
 
     for field, values in candidates.items():
-        if field not in uncertain:
+        if field not in uncertain or len({candidate.value for candidate in values}) > 1:
             _resolve(values, field, fields, evidence, warnings)
+
+
+def _clean_title(value: str) -> str:
+    """Remove mail prefixes and recognizable OCR tails while preserving title punctuation."""
+    value = re.sub(r"^(?:(?:fwd?|re)\s*:\s*)+", "", value.strip(), flags=re.I)
+    value = re.sub(
+        r"(?:[ \t]+[|@~^*•]|\|)(?:[ \t]*(?:[|@~^*•]|(?:Al|A1|[l1]{1,2})(?!\w)))*$",
+        "", value,
+    )
+    return re.sub(
+        r"\s*[-–—|:]\s*(?:registrations?|applications?)\s+(?:(?:are|now)\s+)*open[.!]?\s*$",
+        "", value, flags=re.I,
+    ).strip()
 
 
 def _title(text: str, context: Mapping[str, Any], source: str) -> _Candidate | None:
@@ -159,15 +203,11 @@ def _title(text: str, context: Mapping[str, Any], source: str) -> _Candidate | N
         return _candidate(text, labelled, source, labelled["value"].strip())
     subject = context.get("subject")
     if subject:
-        cleaned = re.sub(r"^(?:(?:fwd?|re)\s*:\s*)+", "", subject.strip(), flags=re.I)
-        cleaned = re.sub(
-            r"\s*[-–—|:]\s*(?:registrations?|applications?)\s+(?:(?:are|now)\s+)*open[.!]?\s*$",
-            "", cleaned, flags=re.I,
-        ).strip()
+        cleaned = _clean_title(subject)
         if cleaned:
             return _Candidate(cleaned, evidence_at(subject, 0, len(subject), "email subject"))
     for match in re.finditer(r"^[ \t]*(?P<line>[^\r\n]+)", text, re.M):
-        line = match["line"].strip()
+        line = _clean_title(match["line"])
         if line and match.start() < 300 and not _METADATA_LINE.match(line) and not _URL.match(line):
             return _candidate(text, match, source, line)
         if line:
@@ -229,8 +269,11 @@ def extract_opportunity_fields(
             fields[field], evidence[field] = candidate
 
     _dates(text, source, fields, evidence, warnings)
-    organizers = [_candidate(text, match, source, match["value"].strip())
-                  for match in _ORGANIZER.finditer(text) if match["value"].strip()]
+    organizers = []
+    for match in _ORGANIZER.finditer(text):
+        name = match["value"].strip().rstrip(".,;:!?").rstrip()
+        if name:
+            organizers.append(_candidate(text, match, source, name))
     locations = [_candidate(text, match, source, (match["value"] or match["mode"]).strip())
                  for match in _LOCATION.finditer(text) if (match["value"] or match["mode"]).strip()]
     fees = []

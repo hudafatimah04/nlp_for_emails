@@ -20,8 +20,10 @@ _YEAR_TOKEN_PATTERN = re.compile(rf"\b{_YEAR_TOKEN}\b", re.IGNORECASE)
 _SEMESTER = re.compile(r"\b(?:semester|semesters|sem)\b", re.IGNORECASE)
 _PERCENT = re.compile(r"\b\d+(?:\.\d+)?\s*(?:%|percent\b)", re.IGNORECASE)
 _CGPA = re.compile(
-    r"\b(?:minimum|min\.?)\s+CGPA\s*(?:of\s+|[:=]\s*)?(?P<minimum>\d+(?:\.\d+)?)"
-    r"|\bCGPA\s*(?:>=|≥|at least\s+|(?:of|:)\s*)\s*(?P<label>\d+(?:\.\d+)?)"
+    r"\b(?:minimum|min\.?)\s+CGPA\b\s*(?:required\b\s*)?(?:[:=]\s*|of\s+)?"
+    r"(?:at least\s+)?(?P<minimum>-?\d+(?:\.\d+)?)"
+    r"|\bCGPA\s*(?:>=|≥|:|(?:required|criteria)\b\s*:?|"
+    r"not less than\s+|at least\s+|of\s+(?:at least\s+)?)\s*(?P<label>-?\d+(?:\.\d+)?)"
     r"|\b(?P<suffix>\d+(?:\.\d+)?)\s+CGPA\s+(?:and|or)\s+above\b",
     re.IGNORECASE,
 )

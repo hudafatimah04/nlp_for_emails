@@ -274,3 +274,158 @@ def test_extract_fields_cli_prints_each_attachment_unit(monkeypatch, capsys):
     assert [(unit["source"]["attachment_filename"], unit["opportunity"]["type"]) for unit in units] == [
         ("hackathon.pdf", "Hackathon"), ("internship.pdf", "Internship"),
     ]
+
+@pytest.fixture
+def labelled_document() -> str:
+    return (
+        "Synthetic Hackathon\n"
+        "Organizer: InnovateX Foundation\n"
+        "Event Start Date: 10 January 2027\n"
+        "Event End Date: 12 January 2027\n"
+        "Registration Opens: 1 December 2026\n"
+        "Registration Deadline: 20 December 2026\n"
+        "Minimum CGPA required: 7.0.\n"
+        "Participation is team-based.\n"
+        "Maximum team size: 4 students."
+    )
+
+
+def test_labelled_document_fields_and_evidence(labelled_document):
+    opportunity = extract_opportunity_fields(labelled_document, "Hackathon", {"source": "synthetic.pdf"})
+    eligibility = extract_eligibility(labelled_document, source="synthetic.pdf")
+    expected = {
+        "organizer": ("InnovateX Foundation", 2),
+        "start_date": ("2027-01-10", 3),
+        "end_date": ("2027-01-12", 4),
+        "deadline": ("2026-12-20", 6),
+        "team_based": (True, 8),
+    }
+    for field, (value, line) in expected.items():
+        assert opportunity[field] == value
+        assert opportunity["evidence"][field]["line_number"] == line
+        assert opportunity["evidence"][field]["source"] == "synthetic.pdf"
+    assert eligibility["min_cgpa"] == 7.0
+    assert eligibility["evidence"]["min_cgpa"]["line_number"] == 7
+    assert not opportunity["warnings"] and not eligibility["warnings"]
+
+
+@pytest.mark.parametrize("label", [
+    "Organizer:", "Organiser:", "Organized by", "Organised by", "Presented by", "Company Name:",
+])
+def test_organizer_labels_keep_the_whole_line(label):
+    result = extract_opportunity_fields(f"Event flyer\n{label} InnovateX Labs, Inc. (Campus Unit);", "Hackathon")
+    assert result["organizer"] == "InnovateX Labs, Inc. (Campus Unit)"
+    assert result["evidence"]["organizer"]["line_number"] == 2
+
+
+@pytest.mark.parametrize(("field", "label"), [
+    ("start_date", "Event Start Date:"), ("start_date", "Start Date:"),
+    ("start_date", "Starts on"), ("start_date", "Event Date:"),
+    ("start_date", "Commencement Date:"), ("start_date", "Internship Start:"),
+    ("end_date", "Event End Date:"), ("end_date", "End Date:"),
+    ("end_date", "Ends on"), ("end_date", "Internship End:"),
+])
+def test_single_date_labels(field, label):
+    result = extract_opportunity_fields(f"Event flyer\n{label} 10 January 2027", "Hackathon")
+    assert result[field] == "2027-01-10"
+    assert result["evidence"][field]["line_number"] == 2
+    assert not result["warnings"]
+
+
+@pytest.mark.parametrize("opening", [
+    "Registration Opens: 1 December 2026",
+    "Registration Start Date: 1 December 2026",
+    "Registration starts on 1 December 2026",
+    "Applications open: 1 December 2026 to 15 December 2026",
+    "Registration opens:\n1-15 December 2026",
+])
+def test_opening_dates_do_not_become_event_dates_or_deadlines(opening):
+    result = extract_opportunity_fields(opening, "Hackathon")
+    assert result["start_date"] is result["end_date"] is result["deadline"] is None
+    assert not result["warnings"]
+
+
+def test_opening_and_deadline_on_same_line():
+    result = extract_opportunity_fields(
+        "Registration opens 1 December 2026 and registration deadline: 20 December 2026.", "Hackathon"
+    )
+    assert result["deadline"] == "2026-12-20"
+    assert result["start_date"] is None
+    assert not result["warnings"]
+
+
+def test_labelled_date_range_is_still_recognized():
+    result = extract_opportunity_fields("Event Date: 10-12 January 2027", "Hackathon")
+    assert (result["start_date"], result["end_date"]) == ("2027-01-10", "2027-01-12")
+    assert not result["warnings"]
+
+
+@pytest.mark.parametrize(("field", "label"), [
+    ("start_date", "Start Date"), ("end_date", "End Date"), ("deadline", "Registration Deadline"),
+])
+def test_conflicting_date_labels_preserve_candidates_in_warning(field, label):
+    result = extract_opportunity_fields(
+        f"{label}: 10 January 2027\n{label}: 12 January 2027\n", "Hackathon"
+    )
+    assert result[field] is None
+    assert field not in result["evidence"]
+    assert result["warnings"] == [
+        f"Multiple candidates found for {field}: 2027-01-10 (line 1), 2027-01-12 (line 2)."
+    ]
+
+
+@pytest.mark.parametrize(("text", "expected"), [
+    ("Minimum CGPA required: 7.0.", 7.0),
+    ("CGPA required: 7", 7.0),
+    ("Minimum CGPA: 7.0", 7.0),
+    ("CGPA criteria: 7.5", 7.5),
+    ("CGPA of at least 7", 7.0),
+    ("CGPA not less than 7", 7.0),
+    ("Minimum CGPA required: 70%", None),
+    ("CGPA criteria: 11", None),
+])
+def test_new_cgpa_labels_and_limits(text, expected):
+    result = extract_eligibility(f"Synthetic eligibility\n{text}")
+    assert result["min_cgpa"] == expected
+    if expected is not None:
+        assert result["evidence"]["min_cgpa"]["line_number"] == 2
+        assert not result["warnings"]
+    else:
+        assert result["warnings"]
+
+
+@pytest.mark.parametrize(("text", "expected"), [
+    ("Participation is team-based.", True), ("This is team based.", True),
+    ("Teams of 3 may apply.", True), ("Maximum team size: 4 students.", True),
+    ("Form a team.", True), ("Participate in teams.", True),
+    ("Individual participation.", False), ("Solo.", False), ("On an individual basis.", False),
+])
+def test_team_wording(text, expected):
+    result = extract_opportunity_fields(f"Event flyer\n{text}", "Hackathon")
+    assert result["team_based"] is expected
+    assert result["evidence"]["team_based"]["line_number"] == 2
+
+
+def test_conflicting_team_wording():
+    result = extract_opportunity_fields("Participation is team-based.\nIndividual participation permitted.", "Hackathon")
+    assert result["team_based"] is None
+    assert result["warnings"] == ["Multiple candidates found for team_based."]
+
+
+@pytest.mark.parametrize("source", ["subject", "document"])
+def test_title_ocr_cleanup_preserves_meaningful_date_suffix(source):
+    noisy = "Fw: FWD: re: Campus Internship (May -July'27) |Al @ @"
+    text, context = ("", {"subject": noisy}) if source == "subject" else (noisy, {})
+    result = extract_opportunity_fields(text, "Internship", context)
+    assert result["title"] == "Campus Internship (May -July'27)"
+    assert result["evidence"]["title"]["line_number"] == 1
+
+
+def test_labelled_title_takes_precedence_over_sample_banner():
+    labelled = extract_opportunity_fields(
+        "TEST SAMPLE — Untitled flyer\nEvent Name: Campus Hackathon (May -July'27)", "Hackathon"
+    )
+    assert labelled["title"] == "Campus Hackathon (May -July'27)"
+    assert labelled["evidence"]["title"]["line_number"] == 2
+    unlabelled = extract_opportunity_fields("TEST SAMPLE — Campus AI", "Hackathon")
+    assert unlabelled["title"] == "TEST SAMPLE — Campus AI"
