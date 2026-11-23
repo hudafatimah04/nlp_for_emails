@@ -14,6 +14,7 @@ ALLOWED_SENDERS = [
 ]
 ATTACHMENT_DIR = os.getenv("ATTACHMENT_DIR") or None
 TESSERACT_CMD = os.getenv("TESSERACT_CMD") or None
+PROCESSED_DB_PATH = os.getenv("PROCESSED_DB_PATH") or "processed_emails.db"
 
 _poll_interval = os.getenv("POLL_INTERVAL_SECONDS", "").strip()
 POLL_INTERVAL_SECONDS = int(_poll_interval) if _poll_interval else None
