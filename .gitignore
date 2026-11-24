@@ -8,3 +8,23 @@ attachments/
 .pytest_cache/
 output_json/
 backend_outbox/
+
+# Secrets and credentials
+*.pem
+*.key
+
+# Local runtime data (may contain real email content)
+*.sqlite
+*.sqlite3
+
+# Python
+.venv/
+*.pyc
+.coverage
+htmlcov/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
