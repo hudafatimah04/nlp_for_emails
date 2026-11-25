@@ -27,6 +27,24 @@ Gmail inbox            gmail_integration/authentication.py and email_reader.py
 
 `processing.requires_review` is only a flag in the output. It does not assign a reviewer or start an approval workflow.
 
+### What the backend and frontend teammates need to do
+
+- **Backend ingestion and Supabase.** Implement the REST endpoint that accepts one version 1.0 JSON record and persists it in Supabase. Support `Hackathon`, `Internship`, and `Event`, map the source and eligibility fields, confirm the department codes, and handle duplicate submissions using the agreed idempotency key. Keep Supabase credentials on the backend. Set the NLP client's `BACKEND_MODE=http` and `BACKEND_API_URL` once the receiver is ready. [Payload examples and staging test](docs/team_handoff.md) · [Database mappings and pending decisions](docs/database_integration_contract.md)
+- **Dates and student-facing rules.** NLP extracts the start date, end date, and deadline when the source supports them. It checks calendar validity and basic date ordering. The backend and frontend decide whether an opportunity is active or expired, whether it should appear to students, and which students match its eligibility. An old date alone does not trigger NLP rejection or review. `ready` means suitable for handoff.
+- **Review and display.** Agree on who reviews held records, how approved records are published, and what information the frontend shows. Optional fields can be null.
+
+### Where attachments and local files are stored
+
+| Local path | What it contains |
+| --- | --- |
+| `runtime_storage/job-*/<gmail_message_id>/` | Original supported attachments downloaded during `run`. Dry runs and preview commands use temporary job folders and clean up their downloads when the job finishes. |
+| `attachments/<gmail_message_id>/` | The usual location for `ATTACHMENT_DIR=attachments`. Commands outside a managed job, such as `build-json`, use this configured directory. |
+| `output_json/` | Formatted records, including records held for review. Rejected records go in `output_json/rejected/`. Override the root with `--out-dir`. |
+| `backend_outbox/ready/` | Payload copies written by the mock backend. |
+| `processed_emails.db` | NLP's local SQLite store for processed-email IDs and delivery history. |
+
+The backend should ingest the REST payload into Supabase. The local SQLite file, JSON output directory, and mock outbox are local bookkeeping and preview artifacts. The payload can include `source.attachment_storage_path` for a cited file, but that path refers to the machine running NLP and HTTP handoff sends no file bytes. If teammates need originals for review or display, agree on a transfer and storage workflow, such as uploading to Supabase Storage and storing an object reference. Keep local copies needed for review or pending delivery until that workflow is in place.
+
 ## Quick start without Gmail
 
 From the repository root in PowerShell, install the dependencies and run the offline tests. The tests use synthetic messages and mocked service calls.
@@ -86,7 +104,7 @@ Run from the repository root so the example relative paths resolve there.
 | `GMAIL_CREDENTIALS_PATH` | Desktop OAuth client JSON | Unset. Required for Gmail. | `credentials.json` |
 | `GMAIL_TOKEN_PATH` | Local OAuth token file in an existing writable directory | Unset. Required for Gmail. | `token.json` |
 | `ALLOWED_SENDERS` | Gmail inbox sender filter | Empty list, which allows all inbox senders | `sender-one@example.com,sender-two@example.com` |
-| `ATTACHMENT_DIR` | Local download directory | Unset. Required to save supported attachments. | `attachments` |
+| `ATTACHMENT_DIR` | Downloads outside managed job workspaces | Unset. Required for `build-json` when it downloads attachments. | `attachments` |
 | `TESSERACT_CMD` | Tesseract executable | Unset. OCR uses `tesseract` on PATH. | Path on your machine if Tesseract is outside PATH |
 | `PROCESSED_DB_PATH` | Local SQLite file for processed emails and handoff history | `processed_emails.db` | `processed_emails.db` |
 | `POLL_INTERVAL_SECONDS` | Polling interval for `run --watch` | Unset. The CLI uses 60 seconds. | `30` |
@@ -222,7 +240,7 @@ Each provider has a command budget, set by `GEMINI_REQUEST_LIMIT` and `GROQ_REQU
 
 | Issue type | Codes emitted by the validator |
 | --- | --- |
-| Warnings | `deadline_passed`, `deadline_after_start`, `unknown_department`, `scope_mismatch`, `extraction_warning`. `missing_recommended` is supported if recommended fields are configured. |
+| Warnings | `deadline_after_start`, `unknown_department`, `scope_mismatch`, `extraction_warning`. `missing_recommended` is supported if recommended fields are configured. |
 | Errors | `missing_required`, `invalid_title`, `invalid_type`, `invalid_text`, `invalid_date`, `end_before_start`, `invalid_url`, `invalid_fee`, `invalid_team_based`, `invalid_cgpa`, `invalid_year_range`, `invalid_departments` |
 
 `deadline_after_start` leaves the dates intact and flags them for review. `end_before_start` clears both event dates. Material conflicts can appear in `review_reasons`.
