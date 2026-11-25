@@ -10,6 +10,8 @@ from google.auth.exceptions import TransportError
 from googleapiclient.discovery import Resource
 
 from config import settings
+from storage.runtime_storage import current_job
+from document_processing.file_types import document_kind
 from gmail_integration.email_reader import execute_request
 
 
@@ -49,10 +51,7 @@ def download_attachment(
     filename = attachment_meta.get("filename")
     file_type = attachment_meta.get("mime_type")
     extension = Path(filename or "").suffix.lower()
-    if extension in {".pdf", ".docx"} and (file_type or "").split(";", 1)[0].strip().lower() not in {
-        "application/pdf",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    }:
+    if document_kind(file_type) is None and document_kind(extension) is not None:
         file_type = extension
 
     result = {
@@ -66,8 +65,9 @@ def download_attachment(
         return result
 
     result["status"] = "failed"
+    job = current_job() if base_dir is None else None
     directory_setting = base_dir if base_dir is not None else settings.ATTACHMENT_DIR
-    if not directory_setting:
+    if job is None and not directory_setting:
         return {**result, "error": "Set ATTACHMENT_DIR to the local attachment storage directory."}
     if not re.fullmatch(r"[A-Za-z0-9_-]+", gmail_message_id):
         return {**result, "error": "Invalid Gmail message ID for attachment storage."}
@@ -94,12 +94,14 @@ def download_attachment(
         return {**result, "error": "Gmail returned invalid base64url attachment data."}
 
     try:
-        base = Path(directory_setting).expanduser().resolve()
+        base = job.directory() if job is not None else Path(directory_setting).expanduser().resolve()
         directory = base / gmail_message_id
         if directory.resolve() != directory:
             return {**result, "error": "Attachment storage directory redirects to another location."}
         directory.mkdir(parents=True, exist_ok=True)
         path = _write_unique(directory, _safe_filename(filename or "attachment"), data)
+        if job is not None:
+            job.register(path)
     except (OSError, RuntimeError, ValueError):
         return {**result, "error": "Could not save the attachment under ATTACHMENT_DIR."}
 

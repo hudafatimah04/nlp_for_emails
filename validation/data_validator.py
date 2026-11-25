@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 
 from config import validation_rules as rules
 from config.departments import DEPARTMENT_ALIASES
+from validation.text_safety import has_invalid_controls
 
 
 class Issue(TypedDict):
@@ -40,7 +41,7 @@ def _valid_url(value: Any) -> bool:
 
 
 def _validate_dates(
-    opportunity: dict[str, Any], reference_date: date, errors: list[Issue], warnings: list[Issue]
+    opportunity: dict[str, Any], errors: list[Issue], warnings: list[Issue]
 ) -> None:
     dates: dict[str, date] = {}
     for field in ("deadline", "start_date", "end_date"):
@@ -62,8 +63,6 @@ def _validate_dates(
         start = None
     if deadline and start and deadline > start:
         warnings.append(_issue("deadline", "deadline_after_start", "Deadline is after the start date."))
-    if deadline and deadline < reference_date:
-        warnings.append(_issue("deadline", "deadline_passed", "Deadline is before the reference date."))
 
 
 def _validate_eligibility(
@@ -117,7 +116,7 @@ def _validate_eligibility(
 
 
 def validate_opportunity(
-    opportunity_dict: Mapping[str, Any], reference_date: date | None = None
+    opportunity_dict: Mapping[str, Any], reference_date: date | None = None, *, local_event: bool = False,
 ) -> dict[str, Any]:
     """Validate a Phase 4 record and carry forward its provenance and review state."""
     opportunity = dict(opportunity_dict.get("opportunity", {}))
@@ -132,19 +131,21 @@ def validate_opportunity(
     conflicts = list(extracted.get("conflicts", []))
 
     title = opportunity.get("title")
-    if title is not None and (not isinstance(title, str) or not title.strip()):
+    if title is not None and (not isinstance(title, str) or not title.strip() or has_invalid_controls(title)):
         opportunity["title"] = None
-        errors.append(_issue("title", "invalid_title", "Title must be nonempty text."))
+        errors.append(_issue("title", "invalid_title", "Title must be nonempty text without invalid control characters."))
     category = opportunity.get("type")
-    if category is not None and category not in rules.ALLOWED_TYPES:
+    if local_event and category == "Event":
+        warnings.append(_issue("type", "backend_event_pending", "Event delivery is pending backend compatibility."))
+    elif category is not None and category not in rules.ALLOWED_TYPES:
         opportunity["type"] = None
         errors.append(_issue("type", "invalid_type", "Type must be an allowed opportunity type."))
 
     for field in ("description", "organizer", "location"):
         value = opportunity.get(field)
-        if value is not None and (not isinstance(value, str) or not value.strip()):
+        if value is not None and (not isinstance(value, str) or not value.strip() or has_invalid_controls(value)):
             opportunity[field] = None
-            errors.append(_issue(field, "invalid_text", "Expected nonempty text or null."))
+            errors.append(_issue(field, "invalid_text", "Expected nonempty text without invalid control characters, or null."))
     fee = opportunity.get("fee")
     if fee is not None and not (_numeric(fee) and fee >= 0):
         opportunity["fee"] = None
@@ -158,7 +159,8 @@ def validate_opportunity(
         opportunity["registration_link"] = None
         errors.append(_issue("registration_link", "invalid_url", "Expected an HTTP or HTTPS URL with a host."))
 
-    _validate_dates(opportunity, reference_date or date.today(), errors, warnings)
+    # Keep reference_date for callers. Date validity is independent of the current date.
+    _validate_dates(opportunity, errors, warnings)
     _validate_eligibility(eligibility, errors, warnings)
 
     values = {**opportunity, **eligibility}
@@ -176,25 +178,18 @@ def validate_opportunity(
     ]))
     if errors:
         reasons.append("Validation found errors.")
-    missing_already_explained = any(reason.startswith("Missing fields:") for reason in reasons)
-    explained_fields = extracted.get("missing_fields", []) if missing_already_explained else []
-    unexplained = [
-        issue for issue in warnings
-        if issue["code"] != "missing_recommended" or issue["field"] not in explained_fields
-    ]
-    if unexplained:
-        labels = dict.fromkeys(
-            "missing recommended fields" if issue["code"] == "missing_recommended" else issue["code"]
-            for issue in unexplained
-        )
-        noun = "warning" if len(unexplained) == 1 else "warnings"
-        reasons.append(f"{len(unexplained)} {noun}: {', '.join(labels)}.")
-    if conflicts:
-        reasons.append("Extracted values conflict.")
+    review_warnings = [issue for issue in warnings if issue["code"] in rules.REVIEW_WARNING_CODES]
+    if review_warnings:
+        labels = dict.fromkeys(issue["code"] for issue in review_warnings)
+        noun = "warning" if len(review_warnings) == 1 else "warnings"
+        reasons.append(f"{len(review_warnings)} {noun}: {', '.join(labels)}.")
+    material = sorted({conflict["field"] for conflict in conflicts if conflict["field"] in rules.MATERIAL_CONFLICT_FIELDS})
+    if material:
+        reasons.append(f"Unresolved material conflicts: {', '.join(material)}.")
     if extracted.get("requires_review") and not reasons:
         reasons.append("Extraction flagged this opportunity for review.")
 
-    requires_review = bool(extracted.get("requires_review") or errors or warnings or conflicts or reasons)
+    requires_review = bool(reasons)
     status = "rejected" if required_missing else ("needs_review" if requires_review else "ready")
     return {
         "opportunity": opportunity,

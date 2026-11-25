@@ -1,0 +1,107 @@
+{
+  "schema_version": "1.0",
+  "opportunity": {
+    "type": "Hackathon",
+    "title": "Example Campus Hackathon",
+    "description": "A synthetic hackathon announcement.",
+    "organizer": "Example Campus Office",
+    "deadline": "2027-05-01",
+    "start_date": "2027-06-01",
+    "end_date": "2027-06-02",
+    "location": null,
+    "registration_link": "https://example.org/hackathon/apply",
+    "fee": 0,
+    "team_based": true
+  },
+  "eligibility": {
+    "min_year": 2,
+    "max_year": 4,
+    "min_cgpa": null,
+    "department_scope": "SPECIFIC",
+    "eligible_departments": [
+      "CSE"
+    ]
+  },
+  "source": {
+    "gmail_message_id": "fake-hackathon-001",
+    "message_id_header": "<fake-hackathon-001@example.org>",
+    "sender_email": "announcements@example.org",
+    "subject": "Example Campus Hackathon",
+    "received_at": "2027-04-01T10:00:00+00:00",
+    "attachment_filename": null,
+    "attachment_file_type": null,
+    "attachment_storage_path": null,
+    "attachment_extraction_status": null
+  },
+  "processing": {
+    "classification": "Hackathon",
+    "status": "ready",
+    "requires_review": false,
+    "review_reasons": [],
+    "missing_fields": [
+      "location",
+      "min_cgpa"
+    ],
+    "conflicts": [],
+    "errors": [],
+    "warnings": []
+  },
+  "evidence": {
+    "type": {
+      "source": "email",
+      "line_number": 1
+    },
+    "title": {
+      "source": "email",
+      "line_number": 2
+    },
+    "description": {
+      "source": "email",
+      "line_number": 3
+    },
+    "organizer": {
+      "source": "email",
+      "line_number": 4
+    },
+    "deadline": {
+      "source": "email",
+      "line_number": 5
+    },
+    "start_date": {
+      "source": "email",
+      "line_number": 6
+    },
+    "end_date": {
+      "source": "email",
+      "line_number": 7
+    },
+    "registration_link": {
+      "source": "email",
+      "line_number": 9
+    },
+    "fee": {
+      "source": "email",
+      "line_number": 10
+    },
+    "team_based": {
+      "source": "email",
+      "line_number": 11
+    },
+    "min_year": {
+      "source": "email",
+      "line_number": 12
+    },
+    "max_year": {
+      "source": "email",
+      "line_number": 13
+    },
+    "department_scope": {
+      "source": "email",
+      "line_number": 15
+    },
+    "eligible_departments": {
+      "source": "email",
+      "line_number": 16
+    }
+  }
+}

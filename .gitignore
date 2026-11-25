@@ -28,3 +28,12 @@ htmlcov/
 .idea/
 .DS_Store
 Thumbs.db
+
+runtime_storage/
+
+# Custom local secrets, diagnostics and runtime logs
+.env.*
+!.env.example
+diagnostics/
+logs/
+*.log

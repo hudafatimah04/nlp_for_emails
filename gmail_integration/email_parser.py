@@ -6,17 +6,12 @@ from datetime import datetime, timedelta, timezone
 from email.header import decode_header, make_header
 from email.message import Message
 from email.utils import parseaddr
-from pathlib import PurePath
 from typing import Any
 
 from bs4 import BeautifulSoup
+from document_processing.file_types import document_kind
 
 _TEXT_TYPES = {"text/plain", "text/html"}
-_SUPPORTED_TYPES = {
-    "application/pdf",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-}
-_SUPPORTED_EXTENSIONS = {".pdf", ".docx"}
 
 
 def _headers(part: dict[str, Any]) -> dict[str, str]:
@@ -51,17 +46,18 @@ def _collect_parts(
     body = part.get("body", {})
     attachment_id = body.get("attachmentId")
     disposition = headers.get("content-disposition", "").split(";", 1)[0].strip().lower()
+    kind = document_kind(mime_type, filename)
 
-    if filename or disposition == "attachment" or (attachment_id and media_type not in _TEXT_TYPES):
+    if (
+        filename or disposition == "attachment" or (attachment_id and media_type not in _TEXT_TYPES)
+        or (kind == "image" and disposition == "inline")
+    ):
         attachment = {
             "filename": filename,
             "mime_type": mime_type,
             "size": body.get("size"),
             "gmail_attachment_id": attachment_id,
-            "is_supported": (
-                media_type in _SUPPORTED_TYPES
-                or PurePath(filename or "").suffix.lower() in _SUPPORTED_EXTENSIONS
-            ),
+            "is_supported": kind is not None,
         }
         if include_attachment_data and attachment["is_supported"] and not attachment_id and "data" in body:
             attachment["data"] = body["data"]

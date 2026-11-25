@@ -26,6 +26,13 @@ def _nullable(value: Any) -> Any:
     return None if isinstance(value, str) and not value.strip() else value
 
 
+def _format_conflict_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
+    internal = {"citation_corrected", "reported_line_number"}
+    if candidate.get("kind") == "visual":
+        internal.update({"kind", "page_number", "verified", "span"})
+    return {key: value for key, value in candidate.items() if key not in internal}
+
+
 def format_opportunity(
     validated: Mapping[str, Any],
     parsed_email: Mapping[str, Any],
@@ -46,13 +53,18 @@ def format_opportunity(
     })
     if include_body:
         source["email_body"] = _nullable(parsed_email.get("body_text"))
+    processing = {field: validated[field] for field in _PROCESSING_FIELDS}
+    processing["conflicts"] = [
+        {**conflict, "candidates": [_format_conflict_candidate(candidate) for candidate in conflict["candidates"]]}
+        for conflict in processing["conflicts"]
+    ]
 
     return {
         "schema_version": SCHEMA_VERSION,
         "opportunity": {field: _nullable(validated["opportunity"].get(field)) for field in _OPPORTUNITY_FIELDS},
         "eligibility": {field: validated["eligibility"].get(field) for field in _ELIGIBILITY_FIELDS},
         "source": source,
-        "processing": {field: validated[field] for field in _PROCESSING_FIELDS},
+        "processing": processing,
         "evidence": {
             field: {"source": item.get("source"), "line_number": item.get("line_number")}
             for field, item in validated["evidence"].items()

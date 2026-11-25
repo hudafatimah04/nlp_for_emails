@@ -3,7 +3,9 @@ from datetime import date
 
 import pytest
 
-from tests.test_extraction import build, prd_email
+from nlp.llm_extractor import extract_opportunities
+from tests.test_extract_fields_cli import prd_email
+from tests.test_llm_extractor import candidate, claim, client_for, ref
 from validation.data_validator import validate_opportunity
 
 
@@ -39,10 +41,24 @@ def ready_record():
     }
 
 
-def test_prd_fixture_field_values_and_review():
-    record, = build(prd_email(), [])
+def test_prd_fixture_field_values_with_unstated_optional_fields():
+    message = prd_email()
+    description = "Registrations are now open for National Hackathon 2026."
+    years = ref("Students from the 2nd, 3rd, and 4th years with a minimum CGPA of 7.0 are eligible.", 3)
+    departments = ref("Eligible departments include CSE, ISE, and ECE.", 5)
+    event = ref("The event will take place from 20 December 2026 to 22 December 2026.", 9)
+    client = client_for(candidate(
+        "Hackathon", ref(description), claim("title", "National Hackathon 2026", ref(description)),
+        claim("description", description, ref(description)),
+        claim("min_year", 2, years), claim("max_year", 4, years), claim("min_cgpa", 7.0, years),
+        claim("department_scope", "SPECIFIC", departments),
+        claim("eligible_departments", ["CSE", "ISE", "ECE"], departments),
+        claim("deadline", "2026-12-15", ref("The registration deadline is 15 December 2026.", 7)),
+        claim("start_date", "2026-12-20", event), claim("end_date", "2026-12-22", event),
+    ))
+    record, = extract_opportunities(message["subject"], message["body_text"], client=client)
     validated = validate_opportunity(record, REFERENCE_DATE)
-    assert validated["status"] == "needs_review"
+    assert validated["status"] == "ready"
     assert not validated["errors"]
     assert validated["opportunity"] == {
         "title": "National Hackathon 2026",
@@ -84,17 +100,21 @@ def test_reversed_event_dates_clear_both(ready_record):
     assert validated["status"] == "needs_review"
 
 
-@pytest.mark.parametrize(("deadline", "code"), [
-    ("2027-01-16", "deadline_after_start"),
-    ("2026-11-30", "deadline_passed"),
-])
-def test_suspicious_deadlines_are_warnings_and_dates_stay_intact(ready_record, deadline, code):
-    ready_record["opportunity"]["deadline"] = deadline
+def test_deadline_after_start_warns_and_dates_stay_intact(ready_record):
+    ready_record["opportunity"]["deadline"] = "2027-01-16"
     validated = validate_opportunity(ready_record, REFERENCE_DATE)
     assert validated["opportunity"] == ready_record["opportunity"]
     assert not validated["errors"]
-    assert [issue["code"] for issue in validated["warnings"]] == [code]
+    assert [issue["code"] for issue in validated["warnings"]] == ["deadline_after_start"]
     assert validated["status"] == "needs_review"
+
+
+def test_past_opportunity_dates_stay_intact_and_ready(ready_record):
+    validated = validate_opportunity(ready_record, date(2028, 1, 1))
+    assert validated["opportunity"] == ready_record["opportunity"]
+    assert validated["status"] == "ready"
+    assert not validated["requires_review"]
+    assert not validated["warnings"]
 
 
 @pytest.mark.parametrize("invalid", ["2026-02-30", "20260101", "2026-1-01", "2026-W01-1", " 2026-12-01"])
@@ -128,8 +148,8 @@ def test_invalid_years_clear_only_unreliable_bounds(ready_record, minimum, maxim
 
 @pytest.mark.parametrize(("codes", "scope", "expected_codes", "expected_scope", "expected_issues"), [
     (["CSE", "XYZ"], "SPECIFIC", ["CSE"], "SPECIFIC", {"unknown_department"}),
-    (["XYZ"], "SPECIFIC", [], None, {"unknown_department", "scope_mismatch", "missing_recommended"}),
-    (["CSE"], "ALL", ["CSE"], None, {"scope_mismatch", "missing_recommended"}),
+    (["XYZ"], "SPECIFIC", [], None, {"unknown_department", "scope_mismatch"}),
+    (["CSE"], "ALL", ["CSE"], None, {"scope_mismatch"}),
     ([], "ALL", [], "ALL", set()),
 ])
 def test_department_codes_and_scope(ready_record, codes, scope, expected_codes, expected_scope, expected_issues):
@@ -196,21 +216,62 @@ def test_extraction_review_flag_alone_prevents_ready(ready_record):
 
 
 def test_warning_reasons_name_the_cause_without_repeating_missing_fields(ready_record):
-    ready_record["opportunity"].update(organizer=None, deadline="2026-11-30")
+    ready_record["opportunity"].update(organizer=None, deadline="2027-01-16")
     ready_record["eligibility"]["eligible_departments"].append("XYZ")
     ready_record["processing"].update(
         requires_review=True, missing_fields=["organizer"], review_reasons=["Missing fields: organizer."]
     )
     result = validate_opportunity(ready_record, REFERENCE_DATE)
     assert result["review_reasons"] == [
-        "Missing fields: organizer.", "2 warnings: deadline_passed, unknown_department.",
+        "Missing fields: organizer.", "1 warning: deadline_after_start.",
     ]
     assert {issue["code"] for issue in result["warnings"]} == {
-        "deadline_passed", "unknown_department", "missing_recommended",
+        "deadline_after_start", "unknown_department",
     }
 
 
-def test_missing_recommended_warning_reason_when_no_explanation_exists(ready_record):
-    ready_record["opportunity"].update(organizer=None, location=None)
+@pytest.mark.parametrize("category", ["Hackathon", "Internship"])
+def test_unstated_optional_fields_are_listed_without_review(ready_record, category):
+    ready_record["opportunity"].update(
+        type=category, organizer=None, location=None, fee=None, team_based=None, description=None,
+        deadline=None, registration_link=None, start_date=None, end_date=None,
+    )
+    ready_record["eligibility"].update(min_year=None, max_year=None, min_cgpa=None, department_scope=None,
+                                      eligible_departments=[])
     result = validate_opportunity(ready_record, REFERENCE_DATE)
-    assert result["review_reasons"] == ["2 warnings: missing recommended fields."]
+    assert result["status"] == "ready"
+    assert {"organizer", "fee", "team_based", "description", "min_year", "max_year",
+            "min_cgpa", "department_scope"} <= set(result["missing_fields"])
+    assert result["review_reasons"] == []
+
+
+def test_unstated_cgpa_alone_does_not_require_review(ready_record):
+    ready_record["eligibility"]["min_cgpa"] = None
+    validated = validate_opportunity(ready_record, REFERENCE_DATE)
+    assert validated["status"] == "ready"
+    assert validated["eligibility"]["min_cgpa"] is None
+    assert "min_cgpa" in validated["missing_fields"]
+    assert not validated["warnings"]
+
+
+@pytest.mark.parametrize(("field", "status"), [
+    ("location", "ready"), ("fee", "ready"), ("deadline", "needs_review"),
+    ("registration_link", "needs_review"),
+])
+def test_nonblocking_warnings_and_material_conflicts(ready_record, field, status):
+    ready_record["opportunity"][field] = None
+    conflict = {"field": field, "candidates": [{"value": "One"}, {"value": "Two"}]}
+    ready_record["processing"].update(conflicts=[conflict], warnings=["Optional evidence was rejected."])
+    result = validate_opportunity(ready_record, REFERENCE_DATE)
+    assert result["status"] == status
+    assert result["opportunity"][field] is None
+    assert result["conflicts"] == [conflict]
+    assert result["warnings"][0]["code"] == "extraction_warning"
+
+
+def test_control_characters_make_title_invalid(ready_record):
+    ready_record["opportunity"]["title"] = "Synthetic\x01 title"
+    result = validate_opportunity(ready_record, REFERENCE_DATE)
+    assert result["status"] == "rejected"
+    assert result["opportunity"]["title"] is None
+    assert result["errors"][0]["code"] == "invalid_title"

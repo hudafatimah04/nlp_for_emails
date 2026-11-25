@@ -3,27 +3,27 @@
 from pathlib import Path
 from typing import Any
 
+from document_processing.archive_extractor import extract_archive
 from document_processing.docx_extractor import extract_docx_text
-from document_processing.ocr_processor import ocr_pdf_pages
+from document_processing.file_types import document_kind
+from document_processing.ocr_processor import ocr_image, ocr_pdf_pages
 from document_processing.pdf_extractor import extract_pdf_text
-
-_PDF_TYPES = {"pdf", ".pdf", "application/pdf"}
-_DOCX_TYPES = {
-    "docx", ".docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-}
-
 
 def extract_document(path: str | Path, file_type: str | None) -> dict[str, Any]:
     """Return text, extraction method, status, successful OCR count, and warnings."""
     warnings: list[str] = []
     result = {"text": None, "method": None, "status": "failed", "pages_ocr_count": 0, "warnings": warnings}
-    kind = (file_type or "").split(";", 1)[0].strip().lower()
-    if kind in _DOCX_TYPES:
+    kind = document_kind(file_type)
+    if kind == "image":
+        return ocr_image(path)
+    if kind == "zip":
+        return extract_archive(path, extract_document)
+    if kind == "docx":
         docx = extract_docx_text(path)
         if docx.get("error"):
             warnings.append(docx["error"])
         return {**result, "text": docx["text"], "method": "docx", "status": docx["status"]}
-    if kind not in _PDF_TYPES:
+    if kind != "pdf":
         return {**result, "status": "unsupported", "warnings": ["Unsupported document type."]}
 
     result["method"] = "pdf_text"
@@ -34,6 +34,8 @@ def extract_document(path: str | Path, file_type: str | None) -> dict[str, Any]:
 
     pages = pdf["pages"]
     needs_ocr = [page["page_number"] for page in pages if not page["has_text"]]
+    if needs_ocr or pdf["visual_layout"]:
+        result["inline_pdf"] = True
     if not needs_ocr:
         return {**result, "text": pdf["full_text"], "status": "success"}
 

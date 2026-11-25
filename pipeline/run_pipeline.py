@@ -9,6 +9,7 @@ from typing import Any
 
 from config import settings
 from integration.backend_client import HandoffResult, send_opportunity
+from nlp.llm_errors import LLMExtractionError
 from output.json_formatter import format_opportunity
 from output.local_json import write_json_file
 from storage.processed_store import clear_processed, is_delivered, is_processed, mark_processed, record_delivery
@@ -16,6 +17,14 @@ from validation.data_validator import validate_opportunity
 
 Record = dict[str, Any]
 OpportunityUnit = tuple[Record, Record | None]
+
+
+def format_local_record(
+    record: Record, email: Record, attachment: Record | None, *, include_body: bool = False,
+) -> Record:
+    """Validate and format an opportunity, including local-only Event records."""
+    validated = validate_opportunity(record, local_event=record["opportunity"].get("type") == "Event")
+    return format_opportunity(validated, email, attachment, include_body=include_body)
 
 
 @dataclass(frozen=True)
@@ -72,9 +81,7 @@ def process_email(
 
         records = []
         for index, (record, attachment) in enumerate(sorted(units, key=lambda unit: unit[1] is not None), 1):
-            payload = format_opportunity(
-                validate_opportunity(record), message, attachment, include_body=services.include_body,
-            )
+            payload = format_local_record(record, message, attachment, include_body=services.include_body)
             status = payload["processing"]["status"]
             folder = services.out_dir / "rejected" if status == "rejected" else services.out_dir
             path = folder / f"{message_id}__{index}.json"
@@ -91,12 +98,18 @@ def process_email(
             records.append((key, payload, summary))
 
         for key, payload, summary in records:
+            if payload["opportunity"]["type"] == "Event":
+                summary.update(error="backend_event_pending", action="pending_backend_compatibility")
+                continue
             if summary["status"] == "rejected":
                 summary.update(error="rejected_not_sent", action="rejected_not_sent")
                 continue
             if incomplete:
                 # A missing document can change qualification and ordinal keys on retry.
                 summary.update(error="attachment_processing_incomplete", action="deferred")
+                continue
+            if summary["status"] == "needs_review":
+                summary["action"] = "held_for_review"
                 continue
             if services.check_delivered(key, mode):
                 summary.update(already_delivered=True, action="already_delivered")
@@ -122,6 +135,12 @@ def process_email(
             if not dry_run:
                 services.save_processed(message_id, header, outcome)
             result["outcome"] = outcome
+    except LLMExtractionError as error:
+        code = "quota_reached" if error.quota else "extraction_failed"
+        result.update(
+            error=f"{error.provider}_{code}", stop_llm_requests=error.quota,
+            error_type=type(error).__name__, error_message=str(error), retryable_error=True,
+        )
     except Exception as error:
         # Exception text from libraries can carry private data or credentials.
         result.update(

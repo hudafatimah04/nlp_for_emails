@@ -56,7 +56,9 @@ def test_html_only():
         ("handout", "application/pdf", True),
         ("guide.DOCX", "application/octet-stream", True),
         ("guide", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", True),
-        ("archive.zip", "application/zip", False),
+        ("archive.zip", "application/zip", True),
+        ("poster.jpeg", "image/jpeg", True),
+        ("poster.png", "application/octet-stream", True),
         ("legacy.doc", "application/msword", False),
     ],
 )

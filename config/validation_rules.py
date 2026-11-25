@@ -4,10 +4,10 @@ from config.departments import MAX_ACADEMIC_YEAR
 
 # PENDING CONFIRMATION WITH BACKEND: mandatory fields and ranges.
 REQUIRED_FIELDS = ["title", "type"]
-RECOMMENDED_FIELDS = [
-    "deadline", "organizer", "location", "registration_link", "fee", "team_based",
-    "min_year", "max_year", "min_cgpa", "department_scope",
-]
+# Unstated optional fields remain null without triggering review.
+RECOMMENDED_FIELDS: list[str] = []
+MATERIAL_CONFLICT_FIELDS = {"type", "title", "deadline", "registration_link"}
+REVIEW_WARNING_CODES = {"deadline_after_start", "backend_event_pending"}
 MIN_YEAR_ALLOWED = 1
 MAX_YEAR_ALLOWED = MAX_ACADEMIC_YEAR
 MIN_CGPA_ALLOWED = 0

@@ -3,6 +3,7 @@ import json
 import shutil
 from pathlib import Path
 from unittest.mock import Mock
+from zipfile import ZipFile
 
 import pymupdf
 import pytest
@@ -95,7 +96,7 @@ def test_corrupted_files(tmp_path):
     assert pdf["status"] == "failed" and pdf["error"]
     assert extract_document(path, "pdf")["status"] == "failed"
     assert extract_document(path, "docx")["status"] == "failed"
-    assert extract_document(path, "application/zip")["status"] == "unsupported"
+    assert extract_document(path, "application/zip")["status"] == "failed"
 
 
 def test_password_protected_pdf(tmp_path):
@@ -137,7 +138,8 @@ def test_ocr_failure_is_reported(tmp_path, monkeypatch):
     assert result["status"] == "failed"
     assert result["method"] == "ocr"
     assert "TESSERACT_CMD" in result["warnings"][0]
-    assert run.call_args.args[0].info["dpi"] == (300, 300)
+    assert run.call_args.args[0].info["dpi"] == (425, 425)
+    assert run.call_args.args[0].mode == "L"
 
 
 def test_ocr_continues_after_page_failure(tmp_path, monkeypatch):
@@ -216,7 +218,7 @@ def test_extract_cli_with_inline_pdf_and_unsupported_attachment(tmp_path, monkey
             {"filename": "test.pdf", "mimeType": "application/octet-stream", "body": {
                 "data": base64.urlsafe_b64encode(source.read_bytes()).decode(),
             }},
-            {"filename": "archive.zip", "mimeType": "application/zip", "body": {}},
+            {"filename": "notes.txt", "mimeType": "text/plain", "body": {}},
         ],
     }}
     assert "data" not in parse_message(raw)["attachments"][0]
@@ -243,3 +245,53 @@ def test_extract_cli_with_inline_pdf_and_unsupported_attachment(tmp_path, monkey
     if show_text:
         assert len(supported["text_preview"]) == 200
     assert unsupported["status"] == "unsupported"
+
+
+@pytest.mark.parametrize("extension", ["jpeg", "png"])
+def test_tesseract_reads_an_image_attachment(tmp_path, monkeypatch, extension):
+    bundled_path = Path("C:/Program Files/Tesseract-OCR/tesseract.exe")
+    executable = settings.TESSERACT_CMD or shutil.which("tesseract")
+    if not executable and bundled_path.is_file():
+        executable = str(bundled_path)
+    if not executable or not shutil.which(executable):
+        pytest.skip("Tesseract executable is unavailable for the image OCR test.")
+    monkeypatch.setattr(settings, "TESSERACT_CMD", executable)
+    image = tmp_path / f"poster.{extension}"
+    with pymupdf.open() as document:
+        page = document.new_page(width=380, height=120)
+        page.insert_text((30, 70), SCANNED, fontsize=26)
+        page.get_pixmap(dpi=220).save(image)
+    result = extract_document(image, f"image/{extension}")
+    assert result["status"] == "success"
+    assert result["method"] == "ocr"
+    assert SCANNED in result["text"]
+    assert result["pages_ocr_count"] == 1
+
+
+def test_zip_combines_supported_members(tmp_path):
+    pdf = make_pdf(tmp_path / "source.pdf")
+    docx = tmp_path / "source.docx"
+    doc = Document()
+    doc.add_paragraph("Registration Deadline: 20 December 2027")
+    doc.save(docx)
+    archive = tmp_path / "details.zip"
+    with ZipFile(archive, "w") as zip_file:
+        zip_file.write(pdf, "poster/flyer.pdf")
+        zip_file.write(docx, "details.docx")
+        zip_file.writestr("program.exe", b"not a document")
+    result = extract_document(archive, "application/zip")
+    assert result["status"] == "success"
+    assert SELECTABLE in result["text"]
+    assert "Registration Deadline: 20 December 2027" in result["text"]
+    assert not (tmp_path / "poster").exists()
+
+
+def test_zip_skips_unsafe_and_nested_members(tmp_path):
+    archive = tmp_path / "unsafe.zip"
+    with ZipFile(archive, "w") as zip_file:
+        zip_file.writestr("../escape.pdf", b"not a document")
+        zip_file.writestr("nested.zip", b"not opened")
+    result = extract_document(archive, "application/zip")
+    assert result["status"] == "failed"
+    assert result["text"] is None
+    assert any("unsafe archive member" in warning for warning in result["warnings"])

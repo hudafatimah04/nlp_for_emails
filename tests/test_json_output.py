@@ -7,7 +7,8 @@ import pytest
 
 import main as cli
 from output.json_formatter import format_opportunity
-from tests.test_extraction import fixture_text
+from tests.test_extract_fields_cli import fixture_text
+from tests.gemini_mock import mock_gemini
 from validation.data_validator import validate_opportunity
 
 
@@ -46,6 +47,7 @@ def test_formatter_keeps_same_sections_and_null_keys_for_rejected_records():
 
 @pytest.fixture
 def synthetic_inbox(monkeypatch):
+    mock_gemini(monkeypatch)
     marker = "Private synthetic body marker."
     raw = {
         "id": "synthetic-attachments",
@@ -74,20 +76,20 @@ def synthetic_inbox(monkeypatch):
     return marker
 
 
-def test_build_json_writes_two_files_and_opt_in_body(synthetic_inbox, tmp_path, capsys):
+def test_build_json_writes_one_file_and_opt_in_body(synthetic_inbox, tmp_path, capsys):
     args = ["build-json", "--out-dir", str(tmp_path)]
     assert cli.main(args) == 0
     summaries = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     files = sorted(tmp_path.glob("*.json"))
-    assert [file.name for file in files] == ["synthetic-attachments__1.json", "synthetic-attachments__2.json"]
+    assert [file.name for file in files] == ["synthetic-attachments__1.json"]
     payloads = [json.loads(file.read_text(encoding="utf-8")) for file in files]
-    assert [item["source"]["attachment_filename"] for item in payloads] == ["hackathon.pdf", "internship.pdf"]
+    assert [item["source"]["attachment_filename"] for item in payloads] == ["hackathon.pdf"]
     assert {item["source"]["gmail_message_id"] for item in payloads} == {"synthetic-attachments"}
     assert all(item["source"]["received_at"] for item in payloads)
     assert all(item["source"]["attachment_extraction_status"] == "success" for item in payloads)
     assert all(item["source"]["attachment_file_type"] == "application/pdf" for item in payloads)
     assert all("email_body" not in item["source"] for item in payloads)
-    assert len(summaries) == 2 and all(summary["written"] for summary in summaries)
+    assert len(summaries) == 1 and all(summary["written"] for summary in summaries)
     assert synthetic_inbox not in json.dumps(payloads + summaries)
 
     assert cli.main([*args, "--include-body"]) == 0
@@ -104,14 +106,14 @@ def test_build_json_writes_two_files_and_opt_in_body(synthetic_inbox, tmp_path, 
 
 
 def test_build_json_still_writes_rejected_records(synthetic_inbox, tmp_path, monkeypatch, capsys):
-    extract = cli.build_opportunities
+    extract = cli.extract_opportunities
 
-    def without_title(*args):
-        records = extract(*args)
+    def without_title(*args, **kwargs):
+        records = extract(*args, **kwargs)
         records[0]["opportunity"]["title"] = None
         return records
 
-    monkeypatch.setattr(cli, "build_opportunities", without_title)
+    monkeypatch.setattr(cli, "extract_opportunities", without_title)
     assert cli.main(["build-json", "--out-dir", str(tmp_path)]) == 0
     payload = json.loads((tmp_path / "synthetic-attachments__1.json").read_text(encoding="utf-8"))
     assert payload["processing"]["status"] == "rejected"

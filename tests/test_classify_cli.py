@@ -5,11 +5,13 @@ import pytest
 
 import main as cli
 from config import settings
-from storage.processed_store import is_processed
+from storage.processed_store import is_processed, mark_processed
+from tests.gemini_mock import mock_gemini
 
 
 @pytest.fixture
 def inbox(tmp_path, monkeypatch):
+    mock_gemini(monkeypatch)
     monkeypatch.setattr(settings, "PROCESSED_DB_PATH", str(tmp_path / "processed.db"))
     monkeypatch.setattr(settings, "ALLOWED_SENDERS", ["synthetic-allowlist-entry"])
     service = Mock()
@@ -38,7 +40,8 @@ def test_classify_cli_skips_either_id_and_can_reprocess(inbox, capsys):
     output = capsys.readouterr().out
     assert json.loads(output)["classification"] == "Internship"
     assert "Synthetic private marker" not in output
-    assert is_processed("first", None)
+    assert not is_processed("first", None)
+    mark_processed("first", "<synthetic-id>", "processed")
 
     cli.get_message.reset_mock()
     assert cli.main(args) == 0
@@ -53,7 +56,7 @@ def test_classify_cli_skips_either_id_and_can_reprocess(inbox, capsys):
 
     assert cli.main([*args, "--reprocess"]) == 0
     assert json.loads(capsys.readouterr().out)["gmail_message_id"] == "second"
-    assert is_processed("second", None)
+    assert not is_processed("second", None)
 
 
 def test_dry_run_does_not_create_database(inbox, tmp_path, capsys):
@@ -62,24 +65,24 @@ def test_dry_run_does_not_create_database(inbox, tmp_path, capsys):
     assert not (tmp_path / "processed.db").exists()
 
 
-def test_explain_preserves_filenames_and_diagnostics_without_document_text(inbox, capsys):
+def test_explain_shows_gemini_evidence_locations_without_document_text(inbox, capsys):
+    assert cli.main(["classify", "--explain", "--dry-run"]) == 0
+    output = capsys.readouterr().out
+    result = json.loads(output)
+    assert result["classification"] == "Internship"
+    assert result["evidence"]["type"] == {"source": "email subject", "source_id": "email_subject", "line_number": 1}
+    assert "Synthetic private marker" not in output
+
+
+def test_unsupported_attachment_reports_incomplete_processing(inbox, capsys):
     cli.get_message.return_value["payload"]["parts"].append({
         "filename": "archive.zip", "mimeType": "application/zip", "body": {},
     })
     cli.download_attachment.side_effect = [
         cli.download_attachment.return_value, {"status": "unsupported"},
     ]
-    assert cli.main(["classify", "--explain", "--dry-run"]) == 0
-    output = capsys.readouterr().out
-    email, attachment, unsupported = json.loads(output)["documents"]
-    assert email["source"] == "email"
-    assert attachment["source"] == "sample.pdf"
-    assert attachment["category_scores"]["Internship"] == attachment["score"]
-    assert attachment["matched_terms"]
-    assert unsupported["source"] == "archive.zip"
-    assert unsupported["classification"] == "Other"
-    assert unsupported["rejection_reasons"]["Internship"] == "no_category_term"
-    assert "Synthetic private marker" not in output
+    assert cli.main(["classify", "--dry-run"]) == 1
+    assert "unsupported file type. Processing is incomplete." in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("failure", ["partial", "failed", "unexpected"])
@@ -97,8 +100,10 @@ def test_errors_leave_unprocessed_messages_retryable(inbox, capsys, failure):
         cli.extract_document.return_value = {"status": "partial", "text": "Summer internship"}
     assert cli.main(["classify"]) == 1
     assert not is_processed("broken", None)
-    assert is_processed("another", None)
+    assert not is_processed("another", None)
     captured = capsys.readouterr()
     assert "Synthetic private error text" not in captured.err
-    if failure != "unexpected":
+    if failure == "partial":
         assert json.loads(captured.out.splitlines()[0])["requires_review"]
+    elif failure == "failed":
+        assert "download failed" in captured.err

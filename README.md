@@ -1,8 +1,8 @@
 # Opportunity NLP
 
-Opportunity NLP reads a monitored Gmail inbox for the Campus Opportunity Information Platform. It extracts text from announcements and attachments, classifies hackathons and internships, validates the extracted fields, and produces one JSON record per opportunity. You can inspect the records locally, write them to a mock outbox, or send them to an agreed REST endpoint.
+Opportunity NLP reads a monitored Gmail inbox for the Campus Opportunity Information Platform. It extracts text from announcements and attachments, classifies hackathons, internships, and events, validates the extracted fields, and produces one JSON record per opportunity. You can inspect the records locally, write them to a mock outbox, or send them to an agreed REST endpoint.
 
-**Status:** The NLP module is complete for the academic demo. The backend, platform database, and proposed admin interface are separate work outside this repository.
+**Handoff status:** The extraction pipeline is ready for team integration. The actual HTTP receiver, platform database, and frontend are separate work.
 
 ## What it does
 
@@ -11,14 +11,13 @@ Gmail inbox            gmail_integration/authentication.py and email_reader.py
   -> Email parsing    gmail_integration/email_parser.py
   -> Attachments      gmail_integration/attachment_downloader.py
   -> Extraction/OCR   document_processing/document_extractor.py and ocr_processor.py
-  -> Classification   nlp/opportunity_classifier.py
-  -> Field extraction nlp/extraction_pipeline.py, information_extractor.py, and eligibility_extractor.py
+  -> LLM extraction   nlp/llm_extractor.py (Gemini or Groq, with shared evidence checks)
   -> Validation       validation/data_validator.py
   -> JSON             output/json_formatter.py
   -> Backend handoff  integration/backend_client.py
 ```
 
-`main.py` provides the CLI. `pipeline/run_pipeline.py` coordinates validation, local output, handoff, and delivery tracking for `run`.
+**`main.py` is the single entry point.** Teammates do not run individual Python modules. `main()` parses commands and creates the provider budget. For `run`, `_run_command()` selects or polls Gmail messages, `_run_email()` loads each message and opens its storage workspace, and `_build_units()` prepares the attachments and calls the shared extractor. `pipeline/run_pipeline.py::process_email()` validates, formats, saves, and hands off eligible records, then records their outcomes.
 
 ## Responsibilities
 
@@ -36,7 +35,7 @@ From the repository root in PowerShell, install the dependencies and run the off
 python -m venv venv
 . .\venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
-python -m pytest -q
+python -m pytest tests -q
 ```
 
 Read the [example payload in Output format](#output-format) to see what the NLP module produces.
@@ -45,13 +44,13 @@ Read the [example payload in Output format](#output-format) to see what the NLP 
 
 ## Prerequisites
 
-- Python 3.10 or newer and Git.
-- Tesseract OCR with English language data for scanned PDFs. A common Windows installation path is `C:/Program Files/Tesseract-OCR/tesseract.exe`. If the executable is outside PATH, set `TESSERACT_CMD` to its full path.
+- Python 3.11 or newer and Git. Dependencies are listed in [requirements.txt](requirements.txt), including the Gmail, Gemini and Groq SDKs, PyMuPDF, Pillow, pytesseract, python-docx, Pydantic, requests, and pytest.
+- Install Tesseract OCR with English data. On macOS use `brew install tesseract`; on Debian or Ubuntu use `sudo apt install tesseract-ocr tesseract-ocr-eng`. On Windows install a Tesseract distribution and add its executable folder to PATH, or set `TESSERACT_CMD` to the executable path on your machine. Check `tesseract --version` and `tesseract --list-langs` for `eng`.
 - A Google account with Gmail for the monitored inbox. For the two-account demo, use a separate approved sender account.
 
 ## Setup
 
-Clone the repository using the URL shared by the project team. The URL below is a placeholder. If you already cloned it, start from the repository root and skip the first two commands.
+Clone the team repository. If you already cloned it, start at the repository root and skip the first two commands.
 
 ```powershell
 git clone https://github.com/hudafatimah04/nlp_for_emails.git
@@ -74,6 +73,10 @@ The shell should show `(venv)` before you run the Python commands. On macOS or L
 
 The client requests only the Gmail read-only scope `https://www.googleapis.com/auth/gmail.readonly` and stores no Google password. After consent it writes the token to `GMAIL_TOKEN_PATH`, such as `token.json` with the example settings below. An External app in Testing receives a refresh token that expires after about seven days for this scope. If reauthorisation is needed, stop the command, delete the local `token.json` at the configured path, and run `fetch` again. [Gmail quickstart](https://developers.google.com/workspace/gmail/api/quickstart/python) · [Consent and test users](https://developers.google.com/workspace/guides/configure-oauth-consent) · [Unverified-app warning](https://developers.google.com/workspace/gmail/api/troubleshoot-authentication-authorization) · [Refresh token expiration](https://developers.google.com/identity/protocols/oauth2#expiration)
 
+## LLM API keys
+
+Create a Gemini key through [Google AI Studio](https://aistudio.google.com/apikey) and a Groq key through the [Groq console](https://console.groq.com/keys). Put them in the ignored local `.env` as `GEMINI_API_KEY` and `GROQ_API_KEY`. Each teammate uses their own authorised credentials. The offline tests and synthetic backend examples require neither key.
+
 ## Configuration
 
 Run from the repository root so the example relative paths resolve there.
@@ -84,7 +87,7 @@ Run from the repository root so the example relative paths resolve there.
 | `GMAIL_TOKEN_PATH` | Local OAuth token file in an existing writable directory | Unset. Required for Gmail. | `token.json` |
 | `ALLOWED_SENDERS` | Gmail inbox sender filter | Empty list, which allows all inbox senders | `sender-one@example.com,sender-two@example.com` |
 | `ATTACHMENT_DIR` | Local download directory | Unset. Required to save supported attachments. | `attachments` |
-| `TESSERACT_CMD` | Tesseract executable | Unset. OCR uses `tesseract` on PATH. | `"C:/Program Files/Tesseract-OCR/tesseract.exe"` |
+| `TESSERACT_CMD` | Tesseract executable | Unset. OCR uses `tesseract` on PATH. | Path on your machine if Tesseract is outside PATH |
 | `PROCESSED_DB_PATH` | Local SQLite file for processed emails and handoff history | `processed_emails.db` | `processed_emails.db` |
 | `POLL_INTERVAL_SECONDS` | Polling interval for `run --watch` | Unset. The CLI uses 60 seconds. | `30` |
 | `BACKEND_API_URL` | Destination URL for HTTP handoff | Unset. Required in HTTP mode. | `https://example.com/opportunities` |
@@ -96,22 +99,42 @@ Set several allowed senders on one line with commas and no quotes, for example `
 
 ## Commands
 
-Run each subcommand as `python main.py <command>`. All six accept `--max N`, a positive integer that defaults to 10. For `run --watch`, the cap applies per poll. Use `python main.py --help` or `python main.py <command> --help` for CLI help. `-h` is equivalent to `--help`.
+Run commands from the project root with the virtual environment active:
+
+```text
+python main.py run --message-id MESSAGE_ID
+python main.py run --message-id MESSAGE_ID --dry-run --reprocess
+python main.py run --max 10
+python main.py run --watch --max 10 --interval 60
+python main.py cleanup --dry-run
+```
+
+These cover normal single-message processing, a single-message preview, batch processing, Gmail monitoring, and cleanup preview. Replace `MESSAGE_ID` with the selected Gmail ID. A selected ID bypasses the sender-filtered inbox search. Keep `BACKEND_MODE=mock` for local integration. A dry run still calls the configured LLM provider.
+
+Inbox commands accept `--max N` with a default of 10. In watch mode it applies per poll. Use `python main.py --help` or `python main.py <command> --help` for CLI help. `-h` is equivalent to `--help`.
 
 | Command example | Purpose and flags beyond `--max` | Marks emails processed? |
 | --- | --- | --- |
 | `python main.py fetch --max 10` | List message metadata. `--show-body` adds up to 500 characters of the email body to console output. | No |
 | `python main.py extract --max 10` | Download supported attachments and report extraction status. `--show-text` adds up to 200 extracted characters to console output. | No |
-| `python main.py classify --max 10 --dry-run` | Classify the email and each attachment. `--explain` includes per-document category scores. `--reprocess` revisits processed emails. `--dry-run` skips writes to the processed store. | Yes unless dry-run or attachment processing fails. Uses the classification as its stored status. |
+| `python main.py classify --max 10` | Preview the LLM classification of the email and its attachments together. `--explain` shows evidence locations. `--reprocess` revisits processed emails. | No |
 | `python main.py extract-fields --max 10` | Print extracted fields and evidence per opportunity. `--explain` includes evidence snippets of up to 80 characters. | No |
 | `python main.py build-json --max 10` | Validate and write local JSON, including rejected records. `--out-dir PATH` defaults to `output_json/`. `--include-body` adds `source.email_body` to files. `--reprocess` replaces existing output files for those opportunities. | No |
-| `python main.py run --max 10 --dry-run` | Process through handoff. `--out-dir PATH` defaults to `output_json/`. `--include-body` adds `source.email_body` to files and handoff payloads. `--reprocess` bypasses the processed-email check and still honours the handoff ledger for the current mode. `--dry-run` reports planned actions without writing JSON, sending, or updating delivery or processed records. `--watch` repeats polling until Ctrl+C. `--interval SECONDS` overrides the watch interval. | Yes when handling completes, unless dry-run. A failed handoff leaves the email retryable. |
+| `python main.py run --max 10 --dry-run` | Process through handoff. `--out-dir PATH` defaults to `output_json/`. `--include-body` adds `source.email_body` to files and handoff payloads. `--reprocess` bypasses the processed-email check and still honours the handoff ledger for the current mode. `--dry-run` reports planned actions without writing JSON, sending, or updating delivery or processed records. `--watch` polls until interrupted, stopped by quota in an explicit mode, or the command budget is spent. `--interval SECONDS` overrides the watch interval. | Yes when handling completes, unless dry-run. A failed handoff leaves the email retryable. |
 
-Dry runs can still download attachments. `classify`, `build-json`, and `run` do not print email bodies or attachment text. `extract-fields` prints extracted fields and can include short source snippets with `--explain`. The raw text previews in `fetch` and `extract` require their respective opt-in flags. For repeated polling, use `python main.py run --max 10 --watch --interval 30`.
+Dry runs can still download attachments. `classify`, `build-json`, and `run` do not print email bodies or attachment text. `extract-fields` prints extracted fields and can include short source snippets with `--explain`. The raw text previews in `fetch` and `extract` require their respective opt-in flags. **Watch budget:** The request budget is shared by all emails and polls in the same process. It never resets each poll. With defaults, auto has up to three Gemini attempts and three Groq attempts available over the whole command. Explicit modes have up to three attempts for their selected provider. `--llm-limit` adds a combined cap. The watcher exits on command-budget exhaustion or interruption, and explicit provider modes also stop on provider quota errors. Restart it as needed. Watch mode polls a bounded recent inbox window and has no Gmail push subscription or pending-delivery replay worker.
+
+Set `LLM_PROVIDER=auto` (the default) and configure `GEMINI_API_KEY` and `GROQ_API_KEY` in your local `.env`. Auto tries Gemini first and can use Groq after an unavailable service, timeout, quota, invalid structured response, or unsupported Gemini request size. A usable Gemini result, including Other, null optional fields, or a material conflict, stays with Gemini. Explicit `gemini` and `groq` modes use that provider alone. The default models are `gemini-3.5-flash-lite` and `qwen/qwen3.8-27b`. Dry runs still make LLM requests. The timeout defaults to 60 seconds. Set `LLM_TIMEOUT_SECONDS` to override it for both providers. Gemini still honors `GEMINI_TIMEOUT_SECONDS` when the shared setting is unset.
+
+The NLP commands send the cleaned subject and body, extracted attachment text, and supported visuals in one request. Gemini accepts JPEG/PNG and selected scanned or layout-heavy PDFs directly. Groq sends JPEG/PNG and renders every page of a selected PDF locally, with the attachment ID and original page number. Groq allows up to three images or rendered pages per request. Local resolution and encoded size checks still apply. Groq token estimates are advisory, and Groq enforces the actual rate and context limits. Set `GROQ_MAX_COMPLETION_TOKENS` to configure the independent completion cap (default 3,072). Text PDFs and DOCX normally use local extraction. Visual evidence is model-reported and has no verified text line in JSON. Unsupported or oversized inputs are reported as incomplete.
+
+Each provider has a command budget, set by `GEMINI_REQUEST_LIMIT` and `GROQ_REQUEST_LIMIT` (default 3 each). Set `--llm-limit N` to impose an additional combined cap. `--llm-attempts` defaults to one attempt per provider per email and accepts up to three. The `--gemini-limit` and `--gemini-attempts` aliases remain available. Auto cools down a provider after service failures or a quota response, using `LLM_PROVIDER_COOLDOWN_SECONDS` (default 60). Local rolling request guardrails use each provider's `*_REQUESTS_PER_MINUTE` and `*_REQUESTS_PER_DAY` settings. They are command-local and provider limits still apply across commands and accounts. Explicit modes stop on quota errors. For one actual attempt in a dry run, select an explicit provider and use `python main.py run --message-id MESSAGE_ID --dry-run --reprocess --llm-limit 1 --llm-attempts 1`.
+
+Event records stay in local JSON with a backend compatibility warning. Other emails produce no opportunity file. After backend Event support is agreed and implemented, use `--reprocess` to revisit locally completed Event emails.
 
 ## Output format
 
-`build-json` and `run` produce one JSON object per opportunity, with the filename `<gmail_message_id>__<n>.json` where numbering starts at 1. One email can produce several opportunities with the same source message ID. `run` writes rejected records under the `rejected/` subdirectory of the output directory. The grouped backend envelope in the contract is a proposal.
+`build-json` and `run` produce at most one opportunity per email, with the filename `<gmail_message_id>__1.json`. Extracted values from the email and supporting attachments are combined. Conflicting values are cleared and their candidates are retained for review. `run` writes rejected records under the `rejected/` subdirectory of the output directory. The grouped backend envelope in the contract is a proposal.
 
 ### Synthetic example
 
@@ -151,19 +174,13 @@ Dry runs can still download attachments. `classify`, `build-json`, and `run` do 
   },
   "processing": {
     "classification": "Hackathon",
-    "status": "needs_review",
-    "requires_review": true,
-    "review_reasons": ["Missing fields: location."],
+    "status": "ready",
+    "requires_review": false,
+    "review_reasons": [],
     "missing_fields": ["location"],
     "conflicts": [],
     "errors": [],
-    "warnings": [
-      {
-        "field": "location",
-        "code": "missing_recommended",
-        "message": "A recommended field is missing."
-      }
-    ]
+    "warnings": []
   },
   "evidence": {
     "title": {"source": "example-flyer.pdf", "line_number": 1},
@@ -200,19 +217,22 @@ Dry runs can still download attachments. `classify`, `build-json`, and `run` do 
 | Status | Meaning |
 | --- | --- |
 | `ready` | Validation found no reason to flag the opportunity. |
-| `needs_review` | Extraction or validation found a warning, conflict, missing recommended field, or other review concern. Optional-field errors can also produce this status. |
+| `needs_review` | A material conflict, significant validation issue, or explicit extraction concern requires review. Missing optional values, visual evidence, and ordinary extraction warnings do not trigger review by themselves. |
 | `rejected` | The required title or type is missing or invalid. |
 
 | Issue type | Codes emitted by the validator |
 | --- | --- |
-| Warnings | `missing_recommended`, `deadline_passed`, `deadline_after_start`, `unknown_department`, `scope_mismatch`, `extraction_warning` |
+| Warnings | `deadline_passed`, `deadline_after_start`, `unknown_department`, `scope_mismatch`, `extraction_warning`. `missing_recommended` is supported if recommended fields are configured. |
 | Errors | `missing_required`, `invalid_title`, `invalid_type`, `invalid_text`, `invalid_date`, `end_before_start`, `invalid_url`, `invalid_fee`, `invalid_team_based`, `invalid_cgpa`, `invalid_year_range`, `invalid_departments` |
 
-`deadline_after_start` leaves the dates intact and flags them for review. `end_before_start` clears both event dates. Conflicts and multiple-opportunity explanations can also appear as prose in `review_reasons`.
+`deadline_after_start` leaves the dates intact and flags them for review. `end_before_start` clears both event dates. Material conflicts can appear in `review_reasons`.
 
 ## Backend integration
 
-- **Mock mode** writes eligible payloads to `BACKEND_OUTBOX_DIR/ready/` or `BACKEND_OUTBOX_DIR/review/` according to the review flag. This split is a placeholder for the team's pending insert-or-hold decision.
+Set `BACKEND_MODE=http` and `BACKEND_API_URL` to the agreed receiver URL. Supply `BACKEND_API_TOKEN` only when the receiver requires bearer authentication. No NLP code edits or database credentials are needed. See the [team handoff](docs/team_handoff.md) for the exact version 1.0 contract, two complete example records, and a direct synthetic HTTP test without Gmail or LLM calls.
+
+- **Automatic handoff** sends only `ready` records. The pipeline writes `needs_review` records to local JSON and reports `held_for_review`.
+- **Mock mode** writes eligible payloads to `BACKEND_OUTBOX_DIR/ready/`.
 - **HTTP mode** POSTs JSON to `BACKEND_API_URL` with a 10-second timeout, `Content-Type: application/json`, and `Idempotency-Key: <gmail_message_id>:<n>`. It sends `Authorization: Bearer <token>` only if `BACKEND_API_TOKEN` is set. Redirects are disabled.
 - The current client accepts `2xx`. It retries connection errors and `429`, `500`, `502`, and `503`, with at most three total attempts and one- and two-second backoff delays. Other `4xx` responses, including `409`, are permanent failures. Other unexpected statuses fail without retry. Rejected NLP records are never sent.
 - `processed_emails.db` is local SQLite bookkeeping, separate from the platform database. The processed-email store skips messages already handled by Gmail ID or RFC Message-ID. The handoff ledger records successful deliveries by idempotency key and mode. On retry, a recorded delivery is skipped in the same mode. Switching modes does not require clearing the ledger. Use `run --reprocess` to revisit emails already marked processed. A failure between remote acceptance and the local write can still cause a repeat request.
@@ -224,7 +244,7 @@ Dry runs can still download attachments. `classify`, `build-json`, and `run` do 
 opportunity_nlp/
   config/                Environment settings, validation rules, department aliases
   docs/                  Database contract and PRD coverage audit
-  document_processing/   PDF, DOCX, and OCR extraction
+  document_processing/   PDF, DOCX, image OCR, and bounded ZIP extraction
   gmail_integration/     Gmail authentication, parsing, and attachment downloads
   integration/           Mock outbox and HTTP handoff
   nlp/                   Classification, extraction, and evidence
@@ -239,7 +259,9 @@ opportunity_nlp/
 
 ## Testing
 
-With the virtual environment active, run `python -m pytest -q`. Gmail and backend HTTP calls are mocked. The real OCR test needs a working Tesseract installation and is skipped if the executable is unavailable. The [PRD coverage audit](docs/prd_coverage.md) distinguishes offline coverage from live acceptance gaps.
+The extractor supports PDF and DOCX documents, JPEG and PNG images through Tesseract, and ZIP attachments containing those types. ZIP processing skips nested archives and unsupported files and applies size and entry limits.
+
+With the virtual environment active, run `python -m pytest tests -q`. Gmail and backend HTTP calls are mocked. The real OCR test needs a working Tesseract installation and is skipped if the executable is unavailable. The [PRD coverage audit](docs/prd_coverage.md) distinguishes offline coverage from live acceptance gaps.
 
 ## Demo guide
 
@@ -260,11 +282,11 @@ The NLP module never needs database credentials. Operational logs and default ru
 ## Known limitations
 
 - Department codes are provisional. Backend duplicate handling and source-row reuse are pending.
-- Separate attachments can yield separate opportunities. Several announcements inside one document are not split into separate records.
+- The pipeline produces at most one opportunity per email. It sends related attachments together for one semantic decision.
 - OCR can introduce errors. The module does not reliably detect wrong-but-plausible extracted values.
 - Gmail polling recovery after a prolonged outage has not been verified live. The From-header sender filter is a demo control.
 - Testing-mode Gmail refresh tokens expire after about seven days. [Google OAuth token expiration](https://developers.google.com/identity/protocols/oauth2#expiration)
-- Admin review and approval workflows remain proposals.
+- The actual HTTP receiver has not been verified. Attachment bytes are not uploaded. Replaying a saved payload without repeating LLM extraction and building the admin review workflow remain integration work.
 
 ## Troubleshooting
 
@@ -277,3 +299,20 @@ The NLP module never needs database credentials. Operational logs and default ru
 | Every email says `skipped (already processed)` | That is the `classify` duplicate-skip message. If you want to inspect those emails again without writing processed status, use `python main.py classify --reprocess --dry-run`. |
 | `already_delivered` after `--reprocess` | The handoff ledger already has that opportunity in the current mode. Reprocessing bypasses only the processed-email skip check. |
 | PowerShell cannot find `run` | Use `python main.py run` from the repository root with the virtual environment active. |
+
+### Local artifact retention
+
+Run `python main.py cleanup --dry-run` to list eligible files and their size.
+Run with `--apply` to remove the listed classes of expired managed artifacts.
+Preview downloads use isolated workspaces under `runtime_storage/` and are
+cleaned up when the operation exits. Completed pre-delivery failures are
+eligible after `FAILED_RETENTION_DAYS` (default 30). Managed temporary
+artifacts eligible for a later sweep use `TEMP_RETENTION_HOURS` (default 24).
+Provider telemetry for processing commands rotates at approximately 1 MB per
+file, keeping up to three rotated copies per command. Closed telemetry logs
+are eligible after `LOG_RETENTION_DAYS` (default 14).
+
+The cleanup command preserves historical folders, unfinished workspaces
+without an ownership manifest, review artifacts, and files associated with
+pending or accepted deliveries. HTTP acceptance alone does not confirm
+persistence or that the backend can access attachments independently.
