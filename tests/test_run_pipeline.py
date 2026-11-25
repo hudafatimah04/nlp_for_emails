@@ -233,12 +233,13 @@ def test_failed_explicit_reprocess_clears_old_skip_marker(inbox, tmp_path, monke
     assert is_processed("synthetic-email", None)
 
 
-def test_rejected_record_is_saved_but_not_handed_off(inbox, tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("category", ["Hackathon", "Internship", "Event"])
+def test_rejected_record_is_saved_but_not_handed_off(inbox, tmp_path, monkeypatch, capsys, category):
     build = cli.extract_opportunities
 
     def reject_one(*args, **kwargs):
         records = build(*args, **kwargs)
-        records[0]["opportunity"]["title"] = None
+        records[0]["opportunity"].update(type=category, title=None)
         return records
 
     monkeypatch.setattr(cli, "extract_opportunities", reject_one)
@@ -265,9 +266,10 @@ def test_dry_run_reports_plans_without_json_outbox_or_database(inbox, tmp_path, 
         assert not (tmp_path / directory).exists()
 
 
-def test_review_status_holds_backend_handoff(tmp_path):
+@pytest.mark.parametrize("category", ["Hackathon", "Internship", "Event"])
+def test_review_status_holds_backend_handoff(tmp_path, category):
     record = {
-        "opportunity": {"type": "Hackathon", "title": "Synthetic Hackathon"},
+        "opportunity": {"type": category, "title": "Synthetic opportunity"},
         "processing": {"conflicts": [{"field": "registration_link", "candidates": []}]},
     }
     send = Mock()
@@ -344,24 +346,29 @@ def test_incomplete_attachment_processing_defers_handoff(inbox, tmp_path, monkey
     assert not is_delivered("synthetic-email:1", "mock")
 
 
-@pytest.mark.parametrize(("subject", "category", "delivered"), [
-    ("Synthetic internship", "Internship", True), ("Synthetic festival", "Event", False),
+@pytest.mark.parametrize(("subject", "category"), [
+    ("Synthetic hackathon", "Hackathon"),
+    ("Synthetic internship", "Internship"),
+    ("Synthetic festival", "Event"),
 ])
-def test_gemini_categories_reach_validation_and_formatting(inbox, tmp_path, monkeypatch, capsys, subject, category, delivered):
-    messages, _, _, _ = inbox
+def test_supported_categories_use_same_mock_handoff(inbox, tmp_path, capsys, subject, category):
+    messages, _, _, post = inbox
     messages["synthetic-email"] = raw_email("synthetic-email", subject=subject)
-    generate = mock_gemini(monkeypatch)
     assert cli.main(run_args(tmp_path)) == 0
-    generate.assert_called_once()
+
     payload = json.loads((tmp_path / "json" / "synthetic-email__1.json").read_text(encoding="utf-8"))
     assert payload["schema_version"] == "1.0"
-    assert payload["opportunity"]["type"] == category
-    tally = read_tally(capsys)
-    assert tally["events_pending_backend"] == int(not delivered)
-    assert is_delivered("synthetic-email:1", "mock") is delivered
-    if not delivered:
-        assert not (tmp_path / "outbox").exists()
-        assert payload["processing"]["warnings"][0]["code"] == "backend_event_pending"
+    assert set(payload) == {"schema_version", "opportunity", "eligibility", "source", "processing", "evidence"}
+    assert payload["opportunity"]["type"] == payload["processing"]["classification"] == category
+    assert payload["processing"]["status"] == "ready"
+    assert not payload["processing"]["requires_review"]
+    assert payload["processing"]["warnings"] == []
+    assert payload["eligibility"]["min_cgpa"] is None
+    assert read_tally(capsys)["opportunities_handed_off"] == 1
+    outbox = tmp_path / "outbox" / "ready" / "synthetic-email__1.json"
+    assert json.loads(outbox.read_text(encoding="utf-8")) == payload
+    assert is_delivered("synthetic-email:1", "mock")
+    post.assert_not_called()
 
 
 def test_all_attachments_reach_gemini_together_and_completed_email_is_skipped(inbox, tmp_path, monkeypatch):

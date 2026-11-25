@@ -1,0 +1,87 @@
+{
+  "schema_version": "1.0",
+  "opportunity": {
+    "type": "Event",
+    "title": "Example Campus Showcase",
+    "description": "A synthetic event announcement for a campus project showcase.",
+    "organizer": "Example Campus Office",
+    "deadline": "2027-05-01",
+    "start_date": "2027-06-01",
+    "end_date": "2027-06-01",
+    "location": null,
+    "registration_link": "https://example.org/event/register",
+    "fee": null,
+    "team_based": null
+  },
+  "eligibility": {
+    "min_year": null,
+    "max_year": null,
+    "min_cgpa": null,
+    "department_scope": null,
+    "eligible_departments": null
+  },
+  "source": {
+    "gmail_message_id": "fake-event-001",
+    "message_id_header": "<fake-event-001@example.org>",
+    "sender_email": "announcements@example.org",
+    "subject": "Example Campus Showcase",
+    "received_at": "2027-04-01T10:00:00+00:00",
+    "attachment_filename": null,
+    "attachment_file_type": null,
+    "attachment_storage_path": null,
+    "attachment_extraction_status": null
+  },
+  "processing": {
+    "classification": "Event",
+    "status": "ready",
+    "requires_review": false,
+    "review_reasons": [],
+    "missing_fields": [
+      "location",
+      "fee",
+      "team_based",
+      "min_year",
+      "max_year",
+      "min_cgpa",
+      "department_scope",
+      "eligible_departments"
+    ],
+    "conflicts": [],
+    "errors": [],
+    "warnings": []
+  },
+  "evidence": {
+    "type": {
+      "source": "email",
+      "line_number": 1
+    },
+    "title": {
+      "source": "email",
+      "line_number": 2
+    },
+    "description": {
+      "source": "email",
+      "line_number": 3
+    },
+    "organizer": {
+      "source": "email",
+      "line_number": 4
+    },
+    "deadline": {
+      "source": "email",
+      "line_number": 5
+    },
+    "start_date": {
+      "source": "email",
+      "line_number": 6
+    },
+    "end_date": {
+      "source": "email",
+      "line_number": 7
+    },
+    "registration_link": {
+      "source": "email",
+      "line_number": 9
+    }
+  }
+}

@@ -264,7 +264,6 @@ def _report_run_email(message_id: str, result: dict[str, Any], tally: dict[str, 
         tally["opportunities_handed_off"] += int(item["handed_off"])
         tally["opportunities_already_delivered"] += int(item["already_delivered"])
         tally["rejected_not_sent"] += int(item["error"] == "rejected_not_sent")
-        tally["events_pending_backend"] += int(item["error"] == "backend_event_pending")
         print(json.dumps({
             "file": Path(item["file"]).name, "status": item["status"], "action": item["action"],
             "error": item["error"], "permanent_error": item["permanent_error"],
@@ -275,7 +274,7 @@ def _run_command(args: argparse.Namespace, budget: ProviderBudget) -> int:
     tally = dict.fromkeys((
         "emails_seen", "skipped_as_duplicates", "processed", "not_an_opportunity", "errors",
         "retryable_errors", "permanent_errors", "opportunities_handed_off",
-        "opportunities_already_delivered", "rejected_not_sent", "events_pending_backend",
+        "opportunities_already_delivered", "rejected_not_sent",
     ), 0)
     poll_failed = stop = False
     try:

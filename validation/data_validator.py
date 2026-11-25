@@ -116,7 +116,7 @@ def _validate_eligibility(
 
 
 def validate_opportunity(
-    opportunity_dict: Mapping[str, Any], reference_date: date | None = None, *, local_event: bool = False,
+    opportunity_dict: Mapping[str, Any], reference_date: date | None = None,
 ) -> dict[str, Any]:
     """Validate a Phase 4 record and carry forward its provenance and review state."""
     opportunity = dict(opportunity_dict.get("opportunity", {}))
@@ -135,9 +135,7 @@ def validate_opportunity(
         opportunity["title"] = None
         errors.append(_issue("title", "invalid_title", "Title must be nonempty text without invalid control characters."))
     category = opportunity.get("type")
-    if local_event and category == "Event":
-        warnings.append(_issue("type", "backend_event_pending", "Event delivery is pending backend compatibility."))
-    elif category is not None and category not in rules.ALLOWED_TYPES:
+    if category is not None and category not in rules.ALLOWED_TYPES:
         opportunity["type"] = None
         errors.append(_issue("type", "invalid_type", "Type must be an allowed opportunity type."))
 

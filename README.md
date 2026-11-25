@@ -130,7 +130,7 @@ The NLP commands send the cleaned subject and body, extracted attachment text, a
 
 Each provider has a command budget, set by `GEMINI_REQUEST_LIMIT` and `GROQ_REQUEST_LIMIT` (default 3 each). Set `--llm-limit N` to impose an additional combined cap. `--llm-attempts` defaults to one attempt per provider per email and accepts up to three. The `--gemini-limit` and `--gemini-attempts` aliases remain available. Auto cools down a provider after service failures or a quota response, using `LLM_PROVIDER_COOLDOWN_SECONDS` (default 60). Local rolling request guardrails use each provider's `*_REQUESTS_PER_MINUTE` and `*_REQUESTS_PER_DAY` settings. They are command-local and provider limits still apply across commands and accounts. Explicit modes stop on quota errors. For one actual attempt in a dry run, select an explicit provider and use `python main.py run --message-id MESSAGE_ID --dry-run --reprocess --llm-limit 1 --llm-attempts 1`.
 
-Event records stay in local JSON with a backend compatibility warning. Other emails produce no opportunity file. After backend Event support is agreed and implemented, use `--reprocess` to revisit locally completed Event emails.
+`Hackathon`, `Internship`, and `Event` use the same validation, version 1.0 JSON, and handoff rules. The backend teammate must support all three types. Other emails produce no opportunity file. Use `--reprocess` to revisit Events already marked processed under the previous local-only policy.
 
 ## Output format
 
@@ -192,7 +192,7 @@ Event records stay in local JSON with a backend compatibility warning. Other ema
 | Field | Type | Meaning | Nullable |
 | --- | --- | --- | --- |
 | `schema_version` | String | Current payload version, `1.0` | No |
-| `opportunity.type`, `title` | Strings | `Hackathon` or `Internship`, and the extracted title | Yes in rejected records |
+| `opportunity.type`, `title` | Strings | `Hackathon`, `Internship`, or `Event`, and the extracted title | Yes in rejected records |
 | `opportunity.description`, `organizer`, `location`, `registration_link` | Strings | Extracted description, organiser, venue or mode, and HTTP(S) URL | Yes |
 | `opportunity.deadline`, `start_date`, `end_date` | Date strings | ISO `YYYY-MM-DD` | Yes |
 | `opportunity.fee` | Number | Registration fee | Yes |
@@ -229,7 +229,7 @@ Event records stay in local JSON with a backend compatibility warning. Other ema
 
 ## Backend integration
 
-Set `BACKEND_MODE=http` and `BACKEND_API_URL` to the agreed receiver URL. Supply `BACKEND_API_TOKEN` only when the receiver requires bearer authentication. No NLP code edits or database credentials are needed. See the [team handoff](docs/team_handoff.md) for the exact version 1.0 contract, two complete example records, and a direct synthetic HTTP test without Gmail or LLM calls.
+Set `BACKEND_MODE=http` and `BACKEND_API_URL` to the agreed receiver URL. Supply `BACKEND_API_TOKEN` only when the receiver requires bearer authentication. No NLP code edits or database credentials are needed. See the [team handoff](docs/team_handoff.md) for the exact version 1.0 contract, three complete example records, and a direct synthetic HTTP test without Gmail or LLM calls.
 
 - **Automatic handoff** sends only `ready` records. The pipeline writes `needs_review` records to local JSON and reports `held_for_review`.
 - **Mock mode** writes eligible payloads to `BACKEND_OUTBOX_DIR/ready/`.

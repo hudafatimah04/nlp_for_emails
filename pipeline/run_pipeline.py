@@ -22,8 +22,8 @@ OpportunityUnit = tuple[Record, Record | None]
 def format_local_record(
     record: Record, email: Record, attachment: Record | None, *, include_body: bool = False,
 ) -> Record:
-    """Validate and format an opportunity, including local-only Event records."""
-    validated = validate_opportunity(record, local_event=record["opportunity"].get("type") == "Event")
+    """Validate and format an extracted opportunity."""
+    validated = validate_opportunity(record)
     return format_opportunity(validated, email, attachment, include_body=include_body)
 
 
@@ -98,9 +98,6 @@ def process_email(
             records.append((key, payload, summary))
 
         for key, payload, summary in records:
-            if payload["opportunity"]["type"] == "Event":
-                summary.update(error="backend_event_pending", action="pending_backend_compatibility")
-                continue
             if summary["status"] == "rejected":
                 summary.update(error="rejected_not_sent", action="rejected_not_sent")
                 continue

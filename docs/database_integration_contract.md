@@ -78,7 +78,7 @@ The notification trigger mechanism, whether backend code, a database function, o
 
 - One email that produces **N opportunities** uses one shared `SOURCE_EMAIL` row, **N `OPPORTUNITY` rows**, and one `ELIGIBILITY_CRITERIA` row for each opportunity, even when every eligibility field is null. Whether `department_scope` can be null is **PENDING CONFIRMATION**.
 - Create `ELIGIBILITY_DEPARTMENT` rows only for `SPECIFIC` scope, one row per code. Each code must already exist in `DEPARTMENT`. The backend must reject or hold a record with an unknown code and must never auto-create a department.
-- NLP sends the type name. The backend resolves it against `OPPORTUNITY_TYPE.type_name` and stores the corresponding `type_id`. The allowed names are `Hackathon` and `Internship`.
+- NLP sends the type name. The backend resolves it against `OPPORTUNITY_TYPE.type_name` and stores the corresponding `type_id`. The allowed names are `Hackathon`, `Internship`, and `Event`. The backend teammate must accept all three names and ensure each resolves to a corresponding row. Ready records of all three types use the same version 1.0 payload and handoff rules.
 - `OPPORTUNITY.attachment_id` is null for an email-only opportunity. For an attachment-based opportunity, set it to the backend ID of its source attachment.
 - Store an `ATTACHMENT` row for each attachment classified `Other` for traceability, with no linked opportunity. The decision to retain `SOURCE_EMAIL` for emails that produce no opportunities is **PENDING CONFIRMATION**. That decision must account for the required source email link on any retained attachment.
 - The backend must choose whether `SOURCE_EMAIL.message_identifier` holds the Gmail message ID or RFC Message-ID. This is **PENDING CONFIRMATION**. NLP's local `processed_emails.db` checks both identifiers and is separate from the backend's unique constraint.
@@ -246,7 +246,7 @@ The example department code is illustrative and must resolve to an existing `DEP
 
 - [ ] Export the Supabase `DEPARTMENT.department_code` values and share them for comparison with `config/departments.py`.
 - [ ] Confirm physical column names, types, and nullability against the documented schema.
-- [ ] Confirm the `OPPORTUNITY_TYPE` rows are exactly `Hackathon` and `Internship`.
+- [ ] Confirm the `OPPORTUNITY_TYPE` rows include `Hackathon`, `Internship`, and `Event`. Actual staging receiver support is **PENDING CONFIRMATION**.
 - [ ] Agree with the NLP developer on the `message_identifier` choice, REST request shape, and attachment storage ownership.
 - [ ] Agree on the policy for review-flagged records. Verify that rejected records produce no database writes.
 - [ ] Verify backend field mappings and FK resolution for source emails, attachments, types, opportunities, criteria, and departments.
